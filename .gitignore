@@ -2,3 +2,5 @@
 .nwave/*
 !.nwave/config.json
 .env
+.claude/settings*
+__pycache__
