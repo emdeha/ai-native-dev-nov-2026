@@ -108,9 +108,11 @@
 - D-demo-operation-marked: The demo clock operation lives under the /demo prefix
   and every response it returns carries a field that marks it as
   demonstration-only, so no reader mistakes it for production behaviour.
-- T-build-metadata: The repository holds no Node.js project. The manifest, the
-  lock file, the TypeScript configuration and the test runner configuration must
-  exist before any oracle can run.
+- T-build-metadata: The manifest, the lock file, the TypeScript configuration
+  and the test runner configuration are test substrate, not product. The
+  acceptance designer writes them before the first oracle runs, because every
+  verification recipe begins by installing the declared dependencies and no
+  oracle can execute without a runner. Craft changes none of them.
 - T-domain-core: The pure seat values and the pure transition are the single
   owner of every seat rule. They hold the data the rules decide on.
 - T-application-layer: The application layer wires the clock, the store and the
@@ -764,15 +766,21 @@
   transition is falsifiable and not vacuous. The typed model grammar accepts a
   kill only from a state-model checker, so this rejection is carried by the
   module and its recorded run instead of a kill row.
+- D-substrate-policy: package.json declares "type": "module" and engines.node
+  matching the installed Node v24.9.0, and pins exact versions, with no range
+  prefix, for typescript, vitest, fast-check, zod and @types/node.
+  package-lock.json is committed so that the installation step is reproducible.
+  Production source lives under src/ and tsconfig.json carries the strict
+  settings the recorded user standards name, including strict, noImplicitAny,
+  strictNullChecks, noUnusedLocals, noUnusedParameters, noImplicitReturns and
+  noFallthroughCasesInSwitch. vitest.config.ts includes tests/**/*.test.ts and
+  nothing else. No script beyond what the verification argv already calls is
+  needed.
 
 ### Targets (Shared design)
 
 | Path | Decision | Reason |
 |---|---|---|
-| `package.json` | CREATE_NEW | T-build-metadata |
-| `package-lock.json` | CREATE_NEW | T-build-metadata |
-| `tsconfig.json` | CREATE_NEW | T-build-metadata |
-| `vitest.config.ts` | CREATE_NEW | T-build-metadata |
 | `src/domain/seat-state.ts` | CREATE_NEW | T-domain-core |
 | `src/domain/seat-transition.ts` | CREATE_NEW | T-domain-core |
 | `src/app/ports.ts` | CREATE_NEW | T-application-layer |
@@ -794,7 +802,7 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected
+D-demo-operation-marked, D-agda-mutant-rejected, D-substrate-policy
 
 ### Oracle (Shared design)
 
@@ -804,8 +812,12 @@ tests/acceptance/seating-area-is-reported.test.ts
 
 ```json
 [
+  "package-lock.json",
+  "package.json",
   "tests/acceptance/support/seat-api-client.ts",
-  "tests/acceptance/support/start-test-service.ts"
+  "tests/acceptance/support/start-test-service.ts",
+  "tsconfig.json",
+  "vitest.config.ts"
 ]
 ```
 
@@ -1010,33 +1022,33 @@ None
     {
       "kind": "manifest",
       "locator": "package.json",
-      "decision": "CHANGED",
+      "decision": "UNCHANGED_COMPATIBLE",
       "reason": {
-        "ref": "I-created-by-this-change"
+        "ref": "T-build-metadata"
       }
     },
     {
       "kind": "lock",
       "locator": "package-lock.json",
-      "decision": "CHANGED",
+      "decision": "UNCHANGED_COMPATIBLE",
       "reason": {
-        "ref": "I-created-by-this-change"
+        "ref": "T-build-metadata"
       }
     },
     {
       "kind": "build_metadata",
       "locator": "tsconfig.json",
-      "decision": "CHANGED",
+      "decision": "UNCHANGED_COMPATIBLE",
       "reason": {
-        "ref": "I-created-by-this-change"
+        "ref": "T-build-metadata"
       }
     },
     {
       "kind": "discovery",
       "locator": "vitest.config.ts",
-      "decision": "CHANGED",
+      "decision": "UNCHANGED_COMPATIBLE",
       "reason": {
-        "ref": "I-created-by-this-change"
+        "ref": "T-build-metadata"
       }
     },
     {
@@ -3489,7 +3501,7 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, V1-decision
+D-demo-operation-marked, D-agda-mutant-rejected, V1-decision, D-substrate-policy
 
 ### Oracle (Value 1)
 
@@ -3499,8 +3511,12 @@ tests/acceptance/hold-a-free-seat.test.ts
 
 ```json
 [
+  "package-lock.json",
+  "package.json",
   "tests/acceptance/support/seat-api-client.ts",
-  "tests/acceptance/support/start-test-service.ts"
+  "tests/acceptance/support/start-test-service.ts",
+  "tsconfig.json",
+  "vitest.config.ts"
 ]
 ```
 
@@ -3821,7 +3837,7 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, V2-decision
+D-demo-operation-marked, D-agda-mutant-rejected, V2-decision, D-substrate-policy
 
 ### Oracle (Value 2)
 
@@ -3831,8 +3847,12 @@ tests/acceptance/confirm-a-held-seat.test.ts
 
 ```json
 [
+  "package-lock.json",
+  "package.json",
   "tests/acceptance/support/seat-api-client.ts",
-  "tests/acceptance/support/start-test-service.ts"
+  "tests/acceptance/support/start-test-service.ts",
+  "tsconfig.json",
+  "vitest.config.ts"
 ]
 ```
 
@@ -4154,7 +4174,7 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, V3-decision
+D-demo-operation-marked, D-agda-mutant-rejected, V3-decision, D-substrate-policy
 
 ### Oracle (Value 3)
 
@@ -4164,8 +4184,12 @@ tests/acceptance/one-seat-is-never-sold-twice.test.ts
 
 ```json
 [
+  "package-lock.json",
+  "package.json",
   "tests/acceptance/support/seat-api-client.ts",
-  "tests/acceptance/support/start-test-service.ts"
+  "tests/acceptance/support/start-test-service.ts",
+  "tsconfig.json",
+  "vitest.config.ts"
 ]
 ```
 
@@ -4473,7 +4497,7 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, V4-decision
+D-demo-operation-marked, D-agda-mutant-rejected, V4-decision, D-substrate-policy
 
 ### Oracle (Value 4)
 
@@ -4483,8 +4507,12 @@ tests/acceptance/every-hold-is-released.test.ts
 
 ```json
 [
+  "package-lock.json",
+  "package.json",
   "tests/acceptance/support/seat-api-client.ts",
-  "tests/acceptance/support/start-test-service.ts"
+  "tests/acceptance/support/start-test-service.ts",
+  "tsconfig.json",
+  "vitest.config.ts"
 ]
 ```
 
