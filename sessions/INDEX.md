@@ -9,3 +9,4 @@ Chronological by creation time. Each folder holds `transcript.jsonl` (raw sessio
 | 3 | [Quint, TLA+, and Agda models](03-quint-tla-and-agda-models/brief.md) | unnamed | `904a9aa3-b214-475e-a96f-4743e936ae2b` | 2026-10-19T21:49:47.763Z | 2026-10-25T15:31:57.120Z | 10 |
 | 4 | [Last Seat feature continuation](04-last-seat-feature-continuation/brief.md) | unnamed | `2ce6fadc-bb81-48e5-ac4f-e7eab0508e66` | 2026-10-25T15:32:35.902Z | 2026-10-25T16:37:09.343Z | 5 |
 | 5 | [Last Seat value 2 confirm](05-last-seat-value-2-confirm/brief.md) | unnamed | `c3423039-2e43-496f-8ad9-cac06fd3e0ab` | 2026-10-25T16:38:06.287Z | 2026-10-25T16:51:27.555Z | 3 |
+| 6 | [Last-seat handover-verify](06-last-seat-handover-verify/brief.md) | unnamed | `507aa961-2735-4889-ac1b-833f640f8034` | 2026-10-25T17:07:37.513Z | 2026-10-25T17:10:04.413Z | 2 |
