@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Last Seat</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a65; --line: #e2e0d9;
+    --free: #2f8f5b; --free-bg: #e5f4ec;
+    --held: #b7791f; --held-bg: #fdf1dc;
+    --mine: #2b6cb0; --mine-bg: #e3eefb;
+    --sold: #7a7873; --sold-bg: #ecebe7;
+    --bad: #c53030; --bad-bg: #fde8e8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #9a9890; --line: #33322e;
+      --free: #5cc28a; --free-bg: #17301f; --held: #e0a548; --held-bg: #33280f;
+      --mine: #6ea8ec; --mine-bg: #142538; --sold: #8d8b85; --sold-bg: #2a2a27;
+      --bad: #f07171; --bad-bg: #3a1717;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+  h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .session { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; color: var(--muted); }
+  .session code { color: var(--ink); }
+  input { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; background: var(--panel); color: var(--ink); }
+  button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  button:hover { filter: brightness(0.95); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; padding: 20px 24px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 12px 16px; } }
+  section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .stage { text-align: center; font-size: 11px; letter-spacing: 0.3em; color: var(--muted); border-bottom: 3px solid var(--line); padding-bottom: 6px; margin-bottom: 18px; }
+  .rows { display: flex; flex-direction: column; gap: 8px; align-items: center; overflow-x: auto; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row-label { width: 20px; color: var(--muted); font-size: 12px; text-align: right; }
+  .seat { width: 64px; height: 64px; border-radius: 10px 10px 6px 6px; border: 2px solid; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2px; font-size: 11px; line-height: 1.15; transition: transform .08s; position: relative; }
+  .seat strong { font-size: 13px; }
+  .seat span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .seat:active { transform: scale(0.96); }
+  .seat.free { color: var(--free); background: var(--free-bg); border-color: var(--free); }
+  .seat.held { color: var(--held); background: repeating-linear-gradient(45deg, var(--held-bg), var(--held-bg) 6px, transparent 6px, transparent 12px), var(--held-bg); border-color: var(--held); }
+  .seat.mine { color: var(--mine); background: var(--mine-bg); border-color: var(--mine); }
+  .seat.sold { color: var(--sold); background: var(--sold-bg); border-color: var(--sold); }
+  .seat.sold.mine { color: var(--mine); background: var(--mine-bg); border-style: double; border-width: 4px; }
+  .seat.selected { outline: 3px solid var(--ink); outline-offset: 2px; }
+  .seat.refused { animation: shake .4s; box-shadow: 0 0 0 4px var(--bad); }
+  @keyframes shake { 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 18px; color: var(--muted); font-size: 12px; justify-content: center; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 2px solid; vertical-align: -2px; margin-right: 5px; }
+  .side { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field input { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .facts { margin: 0 0 12px; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; overflow-wrap: anywhere; }
+  .muted { color: var(--muted); }
+  .log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
+  .log li { border-left: 3px solid var(--free); background: var(--bg); padding: 8px 10px; border-radius: 4px; font-size: 12px; }
+  .log li.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .log .line { display: flex; justify-content: space-between; gap: 8px; font-family: ui-monospace, monospace; }
+  .log .reason { font-weight: 600; color: var(--bad); }
+  .log .message { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--free); margin-right: 6px; }
+  .status-dot.down { background: var(--bad); }
+  .clock { display: flex; gap: 8px; align-items: center; }
+  .clock input { width: 80px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Last Seat</h1>
+  <div class="session">
+    <span>Session <code id="session-id"></code></span>
+    <label for="booker">Booking as</label>
+    <input id="booker" autocomplete="off">
+    <span><span id="live-dot" class="status-dot"></span><span id="live-text">connecting…</span></span>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <div class="stage">STAGE</div>
+    <div id="rows" class="rows"></div>
+    <div class="legend">
+      <span><i style="border-color:var(--free);background:var(--free-bg)"></i>free</span>
+      <span><i style="border-color:var(--held);background:var(--held-bg)"></i>held by someone</span>
+      <span><i style="border-color:var(--mine);background:var(--mine-bg)"></i>yours</span>
+      <span><i style="border-color:var(--sold);background:var(--sold-bg)"></i>sold</span>
+    </div>
+  </section>
+
+  <div class="side">
+    <section class="card">
+      <h2>Seat</h2>
+      <div id="seat-panel" class="muted">Pick a seat from the grid.</div>
+    </section>
+
+    <section class="card">
+      <h2>Demo clock</h2>
+      <div class="clock">
+        <label for="advance-seconds" class="muted">Advance by</label>
+        <input id="advance-seconds" value="60">
+        <span class="muted">s</span>
+        <button id="advance">Advance</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0;font-size:12px">The clock is shared by every session. Countdowns are an estimate; the seat status always comes from the server.</p>
+    </section>
+
+    <section class="card">
+      <h2>Server answers</h2>
+      <ul id="log" class="log"><li class="muted" style="border-color:var(--line)">Nothing sent yet.</li></ul>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const POLL_MS = 1000;
+
+  const safeGet = (storage, key) => { try { return storage.getItem(key); } catch { return null; } };
+  const safeSet = (storage, key, value) => { try { storage.setItem(key, value); } catch {} };
+  const store = (() => { try { return window.sessionStorage; } catch { return null; } })();
+  const shared = (() => { try { return window.localStorage; } catch { return null; } })();
+
+  const sessionId = safeGet(store, "lastSeat.session") ?? Math.random().toString(16).slice(2, 6).toUpperCase();
+  safeSet(store, "lastSeat.session", sessionId);
+  const loadRefs = () => { try { return JSON.parse(safeGet(store, "lastSeat.refs") ?? "{}"); } catch { return {}; } };
+
+  const state = {
+    seats: [],
+    selected: null,
+    booker: safeGet(store, "lastSeat.booker") ?? `Booker ${sessionId}`,
+    refs: loadRefs(),
+    refDrafts: {},
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, props = {}, children = []) => {
+    const node = Object.assign(document.createElement(tag), props);
+    children.forEach((child) => node.append(child));
+    return node;
+  };
+
+  $("session-id").textContent = sessionId;
+  document.title = `Last Seat · ${state.booker}`;
+  const bookerInput = $("booker");
+  bookerInput.value = state.booker;
+  bookerInput.addEventListener("input", () => {
+    state.booker = bookerInput.value;
+    safeSet(store, "lastSeat.booker", state.booker);
+    document.title = `Last Seat · ${state.booker}`;
+    render();
+  });
+
+  const saveRefs = () => safeSet(store, "lastSeat.refs", JSON.stringify(state.refs));
+  const clockSkew = () => Number(safeGet(shared, "lastSeat.skew") ?? "0");
+  const serverNow = () => Math.floor(Date.now() / 1000) + clockSkew();
+
+  const isMine = (seat) =>
+    (seat.status === "held" && seat.holder === state.booker && state.refs[seat.seatId] !== undefined) ||
+    (seat.status === "sold" && seat.owner === state.booker && state.refs[seat.seatId] !== undefined);
+
+  const rowsOf = (seats) => {
+    const grouped = seats.reduce((rows, seat) => {
+      const match = /^([A-Za-z]+)/.exec(seat.seatId);
+      const row = match ? match[1].toUpperCase() : "";
+      return { ...rows, [row]: [...(rows[row] ?? []), seat] };
+    }, {});
+    return Object.entries(grouped);
+  };
+
+  const remaining = (deadline) => Math.max(0, deadline - serverNow());
+  const asClock = (secondsLeft) => `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}`;
+
+  const seatCaption = (seat) => {
+    if (seat.status === "free") return "free";
+    if (seat.status === "held") return isMine(seat) ? `you · ${asClock(remaining(seat.deadline))}` : `${seat.holder}`;
+    return isMine(seat) ? "yours" : seat.owner;
+  };
+
+  const seatButton = (seat) => {
+    const classes = ["seat", seat.status, isMine(seat) ? "mine" : "", state.selected === seat.seatId ? "selected" : ""];
+    const button = el("button", {
+      className: classes.filter(Boolean).join(" "),
+      title: JSON.stringify(seat),
+      onclick: () => { state.selected = seat.seatId; render(); },
+    }, [el("strong", { textContent: seat.seatId }), el("span", { textContent: seatCaption(seat) })]);
+    button.dataset.seat = seat.seatId;
+    return button;
+  };
+
+  const renderGrid = () => {
+    const rows = $("rows");
+    rows.replaceChildren(...rowsOf(state.seats).map(([label, seats]) =>
+      el("div", { className: "row" }, [el("span", { className: "row-label", textContent: label }), ...seats.map(seatButton)])));
+  };
+
+  const fact = (term, value) => [el("dt", { textContent: term }), el("dd", { textContent: value })];
+
+  const seatFacts = (seat) => {
+    if (!seat) return [fact("status", "not reported by the server")].flat();
+    const base = fact("status", seat.status);
+    if (seat.status === "held") {
+      return [...base, ...fact("holder", seat.holder), ...fact("deadline", `${seat.deadline} (≈ ${asClock(remaining(seat.deadline))} left)`)];
+    }
+    if (seat.status === "sold") return [...base, ...fact("owner", seat.owner)];
+    return base;
+  };
+
+  const renderPanel = () => {
+    const panel = $("seat-panel");
+    if (state.selected === null) return;
+    const seatId = state.selected;
+    const seat = state.seats.find((candidate) => candidate.seatId === seatId);
+    const refValue = state.refDrafts[seatId] ?? state.refs[seatId] ?? "";
+    const active = document.activeElement;
+    if (active && active.id === "hold-ref" && panel.dataset.seat === seatId) {
+      panel.querySelector("dl").replaceChildren(...seatFacts(seat));
+      return;
+    }
+    const refInput = el("input", { id: "hold-ref", value: refValue, placeholder: "hold reference", autocomplete: "off" });
+    refInput.addEventListener("input", () => { state.refDrafts[seatId] = refInput.value; });
+    panel.className = "";
+    panel.dataset.seat = seatId;
+    panel.replaceChildren(
+      el("dl", { className: "facts" }, [...fact("seat", seatId), ...seatFacts(seat)]),
+      el("div", { className: "field" }, [el("label", { htmlFor: "hold-ref", textContent: "Hold reference (sent as is)" }), refInput]),
+      el("div", { className: "actions" }, [
+        el("button", { className: "primary", textContent: `Hold as "${state.booker}"`, onclick: () => hold(seatId) }),
+        el("button", { textContent: "Confirm", onclick: () => command(seatId, "confirm", refInput.value) }),
+        el("button", { textContent: "Cancel hold", onclick: () => command(seatId, "cancel", refInput.value) }),
+      ]),
+    );
+  };
+
+  const render = () => { renderGrid(); renderPanel(); };
+
+  const logAnswer = ({ label, status, body }) => {
+    const log = $("log");
+    if (log.firstElementChild && log.firstElementChild.classList.contains("muted")) log.replaceChildren();
+    const refused = status >= 400;
+    const summary = refused
+      ? [el("div", { className: "reason", textContent: body.reason ?? "failure" }), el("div", { className: "message", textContent: body.message ?? body.failure ?? JSON.stringify(body) })]
+      : [el("div", { className: "message", textContent: JSON.stringify(body) })];
+    log.prepend(el("li", { className: refused ? "bad" : "" }, [
+      el("div", { className: "line" }, [el("span", { textContent: label }), el("span", { textContent: `${status} · ${new Date().toLocaleTimeString()}` })]),
+      ...summary,
+    ]));
+  };
+
+  const flashRefused = (seatId) => {
+    const button = document.querySelector(`.seat[data-seat="${CSS.escape(seatId)}"]`);
+    if (!button) return;
+    button.classList.add("refused");
+    setTimeout(() => button.classList.remove("refused"), 1200);
+  };
+
+  const send = async ({ method, path, body }) => {
+    const response = await fetch(`/api${path}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : body,
+    });
+    const text = await response.text();
+    const parsed = (() => { try { return JSON.parse(text); } catch { return { failure: text }; } })();
+    logAnswer({ label: `${method} ${path}`, status: response.status, body: parsed });
+    return { status: response.status, body: parsed };
+  };
+
+  const segment = (value) => encodeURIComponent(value);
+
+  const hold = async (seatId) => {
+    const answer = await send({ method: "POST", path: `/seats/${segment(seatId)}/holds`, body: JSON.stringify({ booker: state.booker }) });
+    if (answer.status === 201) {
+      state.refs = { ...state.refs, [seatId]: answer.body.holdRef };
+      const { [seatId]: _dropped, ...drafts } = state.refDrafts;
+      state.refDrafts = drafts;
+      saveRefs();
+    } else {
+      flashRefused(seatId);
+    }
+    await refresh();
+    renderPanel();
+  };
+
+  const command = async (seatId, verb, holdRef) => {
+    const answer = await send({ method: "POST", path: `/seats/${segment(seatId)}/holds/${segment(holdRef)}/${verb}` });
+    if (answer.status >= 400) flashRefused(seatId);
+    await refresh();
+  };
+
+  $("advance").addEventListener("click", async () => {
+    const answer = await send({ method: "POST", path: "/demo/clock/advance", body: `{"seconds": ${$("advance-seconds").value}}` });
+    if (answer.status === 200 && typeof answer.body.now === "number") {
+      safeSet(shared, "lastSeat.skew", String(answer.body.now - Math.floor(Date.now() / 1000)));
+    }
+    await refresh();
+  });
+
+  const setLive = (up, text) => {
+    $("live-dot").className = up ? "status-dot" : "status-dot down";
+    $("live-text").textContent = text;
+  };
+
+  const refresh = async () => {
+    try {
+      const response = await fetch("/api/seats");
+      const body = await response.json();
+      if (!response.ok || !Array.isArray(body.seats)) throw new Error(body.failure ?? `status ${response.status}`);
+      state.seats = body.seats;
+      setLive(true, `live · ${new Date().toLocaleTimeString()}`);
+      render();
+    } catch (failure) {
+      setLive(false, `server unreachable (${failure.message})`);
+    }
+  };
+
+  refresh();
+  setInterval(refresh, POLL_MS);
+})();
+</script>
+</body>
+</html>
