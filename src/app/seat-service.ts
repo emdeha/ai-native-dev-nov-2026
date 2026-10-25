@@ -3,12 +3,11 @@ import {
   refused,
   type BookerName,
   type HoldRef,
-  type Outcome,
   type SeatId,
   type SeatState,
   type Seconds,
 } from "../domain/seat-state.ts";
-import { step, view, type Command } from "../domain/seat-transition.ts";
+import { step, view, type Command, type CommandOutcome } from "../domain/seat-transition.ts";
 import type { Clock, Configuration, HoldReferences, SeatStore } from "./ports.ts";
 
 export type DisplayedSeat = {
@@ -21,8 +20,9 @@ export type SeatReading =
   | { readonly tag: "no-such-seat" };
 
 export type SeatService = {
-  readonly hold: (options: { readonly seatId: SeatId; readonly booker: BookerName }) => Outcome;
-  readonly confirm: (options: { readonly seatId: SeatId; readonly holdRef: HoldRef }) => Outcome;
+  readonly hold: (options: { readonly seatId: SeatId; readonly booker: BookerName }) => CommandOutcome;
+  readonly confirm: (options: { readonly seatId: SeatId; readonly holdRef: HoldRef }) => CommandOutcome;
+  readonly cancel: (options: { readonly seatId: SeatId; readonly holdRef: HoldRef }) => CommandOutcome;
   readonly seatOf: (options: { readonly seatId: SeatId }) => SeatReading;
   readonly seatingArea: () => readonly DisplayedSeat[];
   readonly advanceClock: (options: { readonly seconds: Seconds }) => Seconds;
@@ -51,7 +51,7 @@ export const seatService = (dependencies: SeatServiceDependencies): SeatService 
   const commanded = (options: {
     readonly seatId: SeatId;
     readonly commandAt: (moment: { readonly now: Seconds }) => Command;
-  }): Outcome => {
+  }): CommandOutcome => {
     const stored = store.read({ seatId: options.seatId });
     if (stored.tag === "no-such-seat") {
       return refused({ reason: "no-such-seat" });
@@ -64,7 +64,7 @@ export const seatService = (dependencies: SeatServiceDependencies): SeatService 
     return outcome;
   };
 
-  const hold = (options: { readonly seatId: SeatId; readonly booker: BookerName }): Outcome =>
+  const hold = (options: { readonly seatId: SeatId; readonly booker: BookerName }): CommandOutcome =>
     commanded({
       seatId: options.seatId,
       commandAt: (moment) => ({
@@ -77,10 +77,16 @@ export const seatService = (dependencies: SeatServiceDependencies): SeatService 
       }),
     });
 
-  const confirm = (options: { readonly seatId: SeatId; readonly holdRef: HoldRef }): Outcome =>
+  const confirm = (options: { readonly seatId: SeatId; readonly holdRef: HoldRef }): CommandOutcome =>
     commanded({
       seatId: options.seatId,
       commandAt: () => ({ tag: "confirm", reference: options.holdRef }),
+    });
+
+  const cancel = (options: { readonly seatId: SeatId; readonly holdRef: HoldRef }): CommandOutcome =>
+    commanded({
+      seatId: options.seatId,
+      commandAt: () => ({ tag: "cancel", reference: options.holdRef }),
     });
 
   const seatingArea = (): readonly DisplayedSeat[] =>
@@ -92,5 +98,5 @@ export const seatService = (dependencies: SeatServiceDependencies): SeatService 
   const advanceClock = (options: { readonly seconds: Seconds }): Seconds =>
     clock.advanceBy({ seconds: options.seconds });
 
-  return { hold, confirm, seatOf, seatingArea, advanceClock };
+  return { hold, confirm, cancel, seatOf, seatingArea, advanceClock };
 };

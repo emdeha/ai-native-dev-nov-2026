@@ -4,12 +4,12 @@ import {
   bookerNameSchema,
   holdRefSchema,
   refusalReasons,
-  type Outcome,
   type RefusalReason,
   type SeatId,
   type SeatState,
   type Seconds,
 } from "../../domain/seat-state.ts";
+import type { CommandOutcome } from "../../domain/seat-transition.ts";
 import type { DisplayedSeat } from "../../app/seat-service.ts";
 
 const seatReportSchema = z.object({
@@ -100,7 +100,7 @@ export const grantedHoldAnswer = (options: {
 
 export const outcomeAnswer = (options: {
   readonly seatId: SeatId;
-  readonly outcome: Outcome;
+  readonly outcome: CommandOutcome;
   readonly refusal: (reason: RefusalReason) => Answer;
 }): Answer => {
   const outcome = options.outcome;
@@ -108,6 +108,7 @@ export const outcomeAnswer = (options: {
     case "granted":
       return grantedHoldAnswer({ reference: outcome.reference, deadline: outcome.deadline });
     case "sold":
+    case "released":
       return seatReportAnswer({ seat: { seatId: options.seatId, state: outcome.next } });
     case "refused":
       return options.refusal(outcome.reason);
