@@ -54,6 +54,18 @@ const orderingsOfTheCommandsAfterASale: readonly (readonly FollowingCommand[])[]
   ["a clock advance", "a confirmation with the old reference", "a hold by another booker"],
 ];
 
+type AHoldReferenceTheWireCannotRead = { readonly description: string; readonly holdReference: string };
+
+const holdReferencesTheWireCannotRead: readonly AHoldReferenceTheWireCannotRead[] = [
+  { description: "a hold reference that is a word", holdReference: "not-a-uuid" },
+  { description: "a hold reference that is a number", holdReference: "12345" },
+  { description: "a hold reference that is half a UUID", holdReference: "550e8400-e29b-41d4-a716" },
+  {
+    description: "a hold reference that is a UUID with its hyphens removed",
+    holdReference: "550e8400e29b41d4a716446655440000",
+  },
+];
+
 const whatWhyHow = (parts: { readonly what: string; readonly why: string; readonly how: string }): string =>
   `WHAT: ${parts.what}\nWHY: ${parts.why}\nHOW: ${parts.how}`;
 
@@ -738,6 +750,52 @@ describe("Confirming a held seat", () => {
       await service.stop();
     }
   });
+
+  it.each(holdReferencesTheWireCannotRead)(
+    "a confirmation carrying $description is refused, names the field that failed and leaves the seating area untouched [law-wire-shape W-case-invalid-holdref]",
+    async (unreadable: AHoldReferenceTheWireCannotRead) => {
+      const service = await givenAFreeSeatingAreaOfThreeSeats({ holdDurationSeconds: twoMinutes });
+      try {
+        await givenTheClockHasMovedOn({ service, seconds: 1 });
+        const granted = await givenTheBookerHoldsTheSeat({ service, seat: theChosenSeat, booker: bookers[0] });
+        const seatingAreaBefore = await theSeatingAreaNow({ service });
+
+        const outcome = await whenTheHolderConfirmsTheSeat({
+          service,
+          seat: theChosenSeat,
+          holdReference: unreadable.holdReference,
+        });
+
+        const stimulus = `confirming seat ${theChosenSeat} with ${unreadable.description}`;
+        const refused = refusedCommand({ outcome, stimulus, expectedReason: "invalid-request" });
+        expect(
+          {
+            statusCode: refused.statusCode,
+            reasonCode: refused.reasonCode,
+            carriesAHumanMessage: refused.message.length > 0,
+            namesTheField: refused.rawBody.includes("holdRef"),
+          },
+          whatWhyHow({
+            what: `${stimulus} answered ${summarise(refused)} instead of a refusal naming the field that failed.`,
+            why: "A hold reference is an opaque value only the seating service issues, so a path that cannot carry one is a malformed request, and the caller can repair it only when the answer says which field was wrong.",
+            how: 'Parse the hold reference of the path against its schema before anything else, and refuse a value that is not a UUID with HTTP 400, the reason code "invalid-request", a human message and the path of the field that failed.',
+          }),
+        ).toEqual({ statusCode: 400, reasonCode: "invalid-request", carriesAHumanMessage: true, namesTheField: true });
+        thenNoAnswerCarriesTheHoldReference({
+          bodies: [refused.rawBody],
+          holdReference: granted.holdReference,
+          stimulus: `the refusal of ${stimulus}`,
+        });
+        thenTheSeatingAreaIsUnchanged({
+          before: seatingAreaBefore,
+          after: await theSeatingAreaNow({ service }),
+          stimulus,
+        });
+      } finally {
+        await service.stop();
+      }
+    },
+  );
 
   it("a confirmation for a seat the seating area does not have is refused and names the seat that was asked for [law-wire-shape]", async () => {
     const service = await givenAFreeSeatingAreaOfThreeSeats({ holdDurationSeconds: twoMinutes });

@@ -7,10 +7,12 @@ import {
   cancelHold,
   confirmHold,
   holdSeat,
+  refusalWhateverTheReason,
   seatId,
   seatReport,
   seatingArea,
   summarise,
+  type AnyObservation,
   type BookerName,
   type CancelOutcome,
   type ClockObservation,
@@ -325,6 +327,22 @@ const thenTheRefusalSays = (options: {
   ).toEqual({ statusCode: options.expectedStatus, reasonCode: options.expectedReason });
 };
 
+const thenTheCommandIsRefusedWhateverTheReason = (options: {
+  readonly observation: AnyObservation;
+  readonly stimulus: string;
+  readonly why: string;
+  readonly how: string;
+}): void => {
+  expect(
+    refusalWhateverTheReason(options.observation).tag,
+    whatWhyHow({
+      what: `${options.stimulus} answered ${summarise(options.observation)} instead of a refusal of any kind.`,
+      why: options.why,
+      how: options.how,
+    }),
+  ).toBe("refused-for-any-reason");
+};
+
 const thenTheSeatingAreaReadsExactlyAsBefore = (options: {
   readonly before: ReportedSeatingArea;
   readonly after: ReportedSeatingArea;
@@ -366,6 +384,13 @@ const thenTheFreedSeatIsGrantedTo = async (options: {
     }),
   ).toEqual({ deadline: options.expectedDeadlineSeconds, reusesTheOldReference: false });
 };
+
+type AHoldReferenceTheWireCannotRead = { readonly shape: string; readonly value: string };
+
+const holdReferencesTheWireCannotRead: readonly AHoldReferenceTheWireCannotRead[] = [
+  { shape: "a plain word", value: "not-a-hold-reference" },
+  { shape: "cut short", value: "123e4567-e89b-12d3-a456" },
+];
 
 describe("Every hold is released", () => {
   it("the holder gives the seat up and the next booker takes it straight away", async () => {
@@ -708,14 +733,15 @@ describe("Every hold is released", () => {
         moment: "an hour after the deadline the hold behind the sale once had",
       });
       const theSeatingAreaAfterTheLongWait = await theSeatingAreaNow({ service });
-      refusedCommand({
-        outcome: await whenTheHolderGivesTheSeatUp({
+      thenTheCommandIsRefusedWhateverTheReason({
+        observation: await whenTheHolderGivesTheSeatUp({
           service,
           seat: theSeatThatGetsBought,
           holdReference: granted.holdReference,
         }),
         stimulus: `booker ${theFirstBooker} trying to give seat ${theSeatThatGetsBought} up with the reference that already bought it`,
-        expected: "a refusal",
+        why: "A seat that has been bought is never released, so a cancellation presenting the reference that bought it must be turned down instead of handing the seat back; which reason the service gives for that refusal is left open.",
+        how: "Refuse a cancellation on a sold seat with one of the refusal answers the seating service promises, and write nothing at all on that path.",
       });
       thenTheSeatIsReportedSoldTo({
         report: (
@@ -739,9 +765,78 @@ describe("Every hold is released", () => {
     }
   });
 
+  it.each(holdReferencesTheWireCannotRead)(
+    "a cancellation whose hold reference is $shape is refused as an invalid request and the hold it named is untouched [law-wire-shape W-case-invalid-holdref]",
+    async (unreadableReference: AHoldReferenceTheWireCannotRead) => {
+      const service = await givenAFreeSeatingAreaOfThreeSeats({ holdDurationSeconds: twoMinutes });
+      try {
+        await givenTheClockHasMovedOn({ service, seconds: 1 });
+        const granted = await givenTheBookerHoldsTheSeat({
+          service,
+          seat: theSeatThatIsHeldAgainAndAgain,
+          booker: theFirstBooker,
+        });
+        const theSeatingAreaBeforeTheAttempt = await theSeatingAreaNow({ service });
+
+        const theAttempt = `a cancellation of seat ${theSeatThatIsHeldAgainAndAgain} whose hold reference is ${unreadableReference.shape}`;
+        const outcome = await whenTheHolderGivesTheSeatUp({
+          service,
+          seat: theSeatThatIsHeldAgainAndAgain,
+          holdReference: unreadableReference.value,
+        });
+
+        const refused = refusedCommand({
+          outcome,
+          stimulus: theAttempt,
+          expected: "a refusal saying the request is not valid",
+        });
+        expect(
+          {
+            statusCode: refused.statusCode,
+            reasonCode: refused.reasonCode,
+            carriesAHumanMessage: refused.message.length > 0,
+            namesTheField: refused.rawBody.includes("holdRef"),
+          },
+          whatWhyHow({
+            what: `${theAttempt} answered ${summarise(refused)} instead of a refusal naming the field that failed.`,
+            why: "A hold reference is an opaque value only the seating service hands out, so a cancellation carrying something that cannot be one is a broken request, and the client can only repair it when the answer says which field was wrong.",
+            how: 'Parse the hold reference of the cancellation path against its schema before anything else, and answer a value that is not a UUID with HTTP 400, the reason code "invalid-request", a human message and the path of the field that failed.',
+          }),
+        ).toEqual({
+          statusCode: 400,
+          reasonCode: "invalid-request",
+          carriesAHumanMessage: true,
+          namesTheField: true,
+        });
+        thenTheSeatIsReportedHeldFor({
+          report: (
+            await theSeatNow({
+              service,
+              seat: theSeatThatIsHeldAgainAndAgain,
+              moment: "after a cancellation carrying a hold reference the wire cannot read",
+            })
+          ).report,
+          seat: theSeatThatIsHeldAgainAndAgain,
+          booker: theFirstBooker,
+          deadlineSeconds: granted.deadlineSeconds,
+          moment: "after a cancellation carrying a hold reference the wire cannot read",
+          why: "A request the service refuses before it reads it must leave the hold exactly as it was, or a malformed reference could release the seat its holder is still paying attention to.",
+          how: "Refuse the request at the boundary, before any seat record is read or written.",
+        });
+        thenTheSeatingAreaReadsExactlyAsBefore({
+          before: theSeatingAreaBeforeTheAttempt,
+          after: await theSeatingAreaNow({ service }),
+          stimulus: theAttempt,
+        });
+      } finally {
+        await service.stop();
+      }
+    },
+  );
+
   it("however the clock jumps, every hold ends at its deadline and every sale survives [law-every-hold-is-released] [law-sold-is-absorbing]", async () => {
     await fc.assert(
-      fc.asyncProperty(fc.array(aWalkCommand, { minLength: 2, maxLength: 6 }), async (commands) => {
+      fc.asyncProperty(aWalkThatBeginsWithAHold, async (commands) => {
         const service = await givenAFreeSeatingAreaOfThreeSeats({ holdDurationSeconds: theWalkHoldDuration });
         try {
           const now = await givenTheClockHasMovedOn({ service, seconds: 1 });
@@ -749,14 +844,17 @@ describe("Every hold is released", () => {
           const afterTheCommands = await walkOneCommandAtATime({
             service,
             commands,
-            state: { records: noSeatHasAnything, now },
-            step: 0,
+            state: { records: noSeatHasAnything, now, tally: nothingHasBeenAskedYet },
           });
           const waitedOut = await waitUntilEveryGrantedDeadlineHasPassed({
             service,
             state: afterTheCommands,
           });
 
+          thenEveryCommandOfTheWalkWasAnsweredAndSomeSeatWasActuallyHeld({
+            tally: waitedOut.tally,
+            stimulus: `the walk ${summarise(commands)}`,
+          });
           await thenNoHoldOutlastsItsDeadlineAndNoSaleIsReleased({
             service,
             state: waitedOut,
@@ -790,9 +888,75 @@ type SeatRecord =
   | { readonly tag: "a hold"; readonly booker: BookerName; readonly reference: string; readonly deadline: number }
   | { readonly tag: "a sale"; readonly owner: BookerName };
 
+type WalkTally = {
+  readonly holdsAsked: number;
+  readonly holdsGranted: number;
+  readonly holdsRefused: number;
+  readonly confirmationsAsked: number;
+  readonly salesMade: number;
+  readonly confirmationsRefused: number;
+  readonly cancellationsAsked: number;
+  readonly seatsGivenUp: number;
+  readonly cancellationsRefused: number;
+};
+
+const nothingHasBeenAskedYet: WalkTally = {
+  holdsAsked: 0,
+  holdsGranted: 0,
+  holdsRefused: 0,
+  confirmationsAsked: 0,
+  salesMade: 0,
+  confirmationsRefused: 0,
+  cancellationsAsked: 0,
+  seatsGivenUp: 0,
+  cancellationsRefused: 0,
+};
+
 type WalkState = {
   readonly records: Readonly<Record<string, SeatRecord>>;
   readonly now: number;
+  readonly tally: WalkTally;
+};
+
+type AnswerKind = "a success" | "a refusal" | "no usable answer";
+
+const answerKind = (outcome: HoldOutcome | ConfirmOutcome | CancelOutcome): AnswerKind => {
+  if (outcome.tag === "granted" || outcome.tag === "confirmed" || outcome.tag === "released") {
+    return "a success";
+  }
+  if (outcome.tag === "refused") {
+    return "a refusal";
+  }
+  return "no usable answer";
+};
+
+const theSeatIsTakenAt = (options: { readonly record: SeatRecord; readonly now: number }): boolean => {
+  if (options.record.tag === "a sale") {
+    return true;
+  }
+  return options.record.tag === "a hold" && options.now < options.record.deadline;
+};
+
+const theRecordedHoldIsStillRunningAt = (options: {
+  readonly record: SeatRecord;
+  readonly now: number;
+}): boolean => options.record.tag === "a hold" && options.now < options.record.deadline;
+
+const thenTheAnswerIsTheOneTheRulesPromise = (options: {
+  readonly outcome: HoldOutcome | ConfirmOutcome | CancelOutcome;
+  readonly promised: AnswerKind;
+  readonly stimulus: string;
+  readonly why: string;
+  readonly how: string;
+}): void => {
+  expect(
+    answerKind(options.outcome),
+    whatWhyHow({
+      what: `${options.stimulus} answered ${summarise(options.outcome)}, which is ${answerKind(options.outcome)} instead of ${options.promised}.`,
+      why: options.why,
+      how: options.how,
+    }),
+  ).toBe(options.promised);
 };
 
 const noSeatHasAnything: Readonly<Record<string, SeatRecord>> = Object.fromEntries(
@@ -827,15 +991,34 @@ const recordAfterOneCommand = async (options: {
     };
   }
   const record = recordOf(options.state, command.seat);
+  const now = options.state.now;
+  const tally = options.state.tally;
   if (command.kind === "hold") {
     const outcome = await whenTheBookerAsksForTheSeat({
       service: options.service,
       seat: command.seat,
       booker: command.booker,
     });
+    const seatIsTaken = theSeatIsTakenAt({ record, now });
+    thenTheAnswerIsTheOneTheRulesPromise({
+      outcome,
+      promised: seatIsTaken ? "a refusal" : "a success",
+      stimulus: `booker ${command.booker} asking at ${now} for seat ${command.seat}, which the walk left as ${summarise(record)}`,
+      why: "A seat that nobody holds any more - because it was never held, because the holder gave it up, or because its deadline passed - must be grantable to the next booker, while a seat still held or already sold must not be handed to anybody else.",
+      how: "Decide a hold by comparing the stored record with the current time on the way in: grant it when the seat is free or its hold has reached its deadline, and refuse it otherwise.",
+    });
+    const state = {
+      ...options.state,
+      tally: {
+        ...tally,
+        holdsAsked: tally.holdsAsked + 1,
+        holdsGranted: tally.holdsGranted + (outcome.tag === "granted" ? 1 : 0),
+        holdsRefused: tally.holdsRefused + (outcome.tag === "refused" ? 1 : 0),
+      },
+    };
     return outcome.tag === "granted"
       ? withRecord({
-          state: options.state,
+          state,
           seat: command.seat,
           record: {
             tag: "a hold",
@@ -844,41 +1027,73 @@ const recordAfterOneCommand = async (options: {
             deadline: outcome.deadlineSeconds,
           },
         })
-      : options.state;
+      : state;
   }
   const reference = referenceHeldFor({ record, whenNoneIsHeld: randomUUID() });
+  const theHoldIsStillRunning = theRecordedHoldIsStillRunningAt({ record, now });
   if (command.kind === "confirm") {
     const outcome = await whenTheBookerConfirmsWithTheReference({
       service: options.service,
       seat: command.seat,
       holdReference: reference,
     });
+    thenTheAnswerIsTheOneTheRulesPromise({
+      outcome,
+      promised: theHoldIsStillRunning ? "a success" : "a refusal",
+      stimulus: `a confirmation of seat ${command.seat} at ${now} carrying the reference of ${summarise(record)}`,
+      how: "Confirm only a hold that the presented reference names and whose deadline the current time has not reached, and refuse every other confirmation.",
+      why: "A hold can only be turned into a sale while it is still running and only by the reference it was granted with, so a confirmation on an expired, released or absent hold must buy nothing.",
+    });
+    const state = {
+      ...options.state,
+      tally: {
+        ...tally,
+        confirmationsAsked: tally.confirmationsAsked + 1,
+        salesMade: tally.salesMade + (outcome.tag === "confirmed" ? 1 : 0),
+        confirmationsRefused: tally.confirmationsRefused + (outcome.tag === "refused" ? 1 : 0),
+      },
+    };
     return outcome.tag === "confirmed" && record.tag === "a hold"
-      ? withRecord({ state: options.state, seat: command.seat, record: { tag: "a sale", owner: record.booker } })
-      : options.state;
+      ? withRecord({ state, seat: command.seat, record: { tag: "a sale", owner: record.booker } })
+      : state;
   }
   const outcome = await whenTheHolderGivesTheSeatUp({
     service: options.service,
     seat: command.seat,
     holdReference: reference,
   });
+  thenTheAnswerIsTheOneTheRulesPromise({
+    outcome,
+    promised: theHoldIsStillRunning ? "a success" : "a refusal",
+    stimulus: `a cancellation of seat ${command.seat} at ${now} carrying the reference of ${summarise(record)}`,
+    why: "Only a hold that is still running can be given up, and only by its own reference, so a cancellation on an expired, released, sold or absent hold must change nothing.",
+    how: "Release a seat only when the presented reference names the hold on it and the current time has not reached its deadline, and refuse every other cancellation.",
+  });
+  const state = {
+    ...options.state,
+    tally: {
+      ...tally,
+      cancellationsAsked: tally.cancellationsAsked + 1,
+      seatsGivenUp: tally.seatsGivenUp + (outcome.tag === "released" ? 1 : 0),
+      cancellationsRefused: tally.cancellationsRefused + (outcome.tag === "refused" ? 1 : 0),
+    },
+  };
   return outcome.tag === "released"
-    ? withRecord({ state: options.state, seat: command.seat, record: { tag: "nothing is stored" } })
-    : options.state;
+    ? withRecord({ state, seat: command.seat, record: { tag: "nothing is stored" } })
+    : state;
 };
 
 const walkOneCommandAtATime = async (options: {
   readonly service: SeatingService;
   readonly commands: readonly ReleaseWalkCommand[];
   readonly state: WalkState;
-  readonly step: number;
 }): Promise<WalkState> => {
   const [command, ...rest] = options.commands;
   if (command === undefined) {
     return options.state;
   }
   const state = await recordAfterOneCommand({ service: options.service, command, state: options.state });
-  return walkOneCommandAtATime({ ...options, commands: rest, state, step: options.step + 1 });
+  return walkOneCommandAtATime({ ...options, commands: rest, state });
 };
 
 const waitUntilEveryGrantedDeadlineHasPassed = async (options: {
@@ -897,40 +1112,115 @@ const waitUntilEveryGrantedDeadlineHasPassed = async (options: {
   };
 };
 
+const thenEveryCommandOfTheWalkWasAnsweredAndSomeSeatWasActuallyHeld = (options: {
+  readonly tally: WalkTally;
+  readonly stimulus: string;
+}): void => {
+  const tally = options.tally;
+  expect(
+    {
+      holdsAnswered: tally.holdsGranted + tally.holdsRefused,
+      confirmationsAnswered: tally.salesMade + tally.confirmationsRefused,
+      cancellationsAnswered: tally.seatsGivenUp + tally.cancellationsRefused,
+      atLeastOneSeatWasActuallyHeld: tally.holdsGranted >= 1,
+    },
+    whatWhyHow({
+      what: `${options.stimulus} asked for ${tally.holdsAsked} holds, ${tally.confirmationsAsked} confirmations and ${tally.cancellationsAsked} cancellations, and the seating service answered ${tally.holdsGranted} granted and ${tally.holdsRefused} refused holds, ${tally.salesMade} sales and ${tally.confirmationsRefused} refused confirmations, ${tally.seatsGivenUp} released seats and ${tally.cancellationsRefused} refused cancellations.`,
+      why: "Releasing holds says nothing about a service that hands out no hold at all: every command the walk sends must be answered either as a success or as a refusal, and the walk must really have put at least one seat into somebody's hands before the claim that every hold is released means anything.",
+      how: "Answer every hold, confirmation and cancellation with the promised success body or the promised refusal body, and grant the opening hold of the walk, which asks for a seat nobody holds.",
+    }),
+  ).toEqual({
+    holdsAnswered: tally.holdsAsked,
+    confirmationsAnswered: tally.confirmationsAsked,
+    cancellationsAnswered: tally.cancellationsAsked,
+    atLeastOneSeatWasActuallyHeld: true,
+  });
+};
+
+type ComparableSeat = {
+  readonly seat: string;
+  readonly status: string;
+  readonly holder: string | null;
+  readonly deadline: number | null;
+  readonly owner: string | null;
+};
+
+const theReportTheRulesPromiseFor = (options: {
+  readonly seat: SeatId;
+  readonly record: SeatRecord;
+  readonly now: number;
+}): ComparableSeat => {
+  if (options.record.tag === "a sale") {
+    return {
+      seat: String(options.seat),
+      status: "sold",
+      holder: null,
+      deadline: null,
+      owner: String(options.record.owner),
+    };
+  }
+  if (options.record.tag === "a hold" && options.now < options.record.deadline) {
+    return {
+      seat: String(options.seat),
+      status: "held",
+      holder: String(options.record.booker),
+      deadline: options.record.deadline,
+      owner: null,
+    };
+  }
+  return { seat: String(options.seat), status: "free", holder: null, deadline: null, owner: null };
+};
+
+const theReportTheSeatingServiceGives = (options: {
+  readonly seat: SeatId;
+  readonly report: SeatReport | undefined;
+}): ComparableSeat => {
+  if (options.report === undefined) {
+    return {
+      seat: String(options.seat),
+      status: "not reported at all",
+      holder: null,
+      deadline: null,
+      owner: null,
+    };
+  }
+  return {
+    seat: options.report.seatId,
+    status: options.report.status,
+    holder: options.report.holder ?? null,
+    deadline: options.report.deadline ?? null,
+    owner: options.report.owner ?? null,
+  };
+};
+
 const thenNoHoldOutlastsItsDeadlineAndNoSaleIsReleased = async (options: {
   readonly service: SeatingService;
   readonly state: WalkState;
   readonly stimulus: string;
 }): Promise<void> => {
   const reported = await theSeatingAreaNow({ service: options.service });
-  const byIdentifier = Object.fromEntries(reported.seats.map((report) => [report.seatId, report]));
-  const judged = seatingAreaOfThreeSeats.map((seat) => {
-    const record = recordOf(options.state, seat);
-    const report = byIdentifier[String(seat)];
-    const status = report === undefined ? "not reported at all" : report.status;
-    const owner = report?.owner ?? null;
-    if (record.tag === "a sale") {
-      return { seat: String(seat), observed: { status, owner }, promised: { status: "sold", owner: String(record.owner) } };
-    }
-    if (record.tag === "a hold" && options.state.now >= record.deadline) {
-      return { seat: String(seat), observed: { status, owner }, promised: { status: "free", owner: null } };
-    }
-    return { seat: String(seat), observed: { status, owner }, promised: { status, owner } };
-  });
+  const byIdentifier = new Map(reported.seats.map((report) => [report.seatId, report]));
+  const observed = seatingAreaOfThreeSeats.map((seat) =>
+    theReportTheSeatingServiceGives({ seat, report: byIdentifier.get(String(seat)) }),
+  );
+  const promised = seatingAreaOfThreeSeats.map((seat) =>
+    theReportTheRulesPromiseFor({ seat, record: recordOf(options.state, seat), now: options.state.now }),
+  );
   expect(
-    judged.map((seat) => ({ seat: seat.seat, ...seat.observed })),
+    observed,
     whatWhyHow({
-      what: `after ${options.stimulus} the three configured seats read ${summarise(judged.map((seat) => ({ seat: seat.seat, ...seat.observed })))} instead of ${summarise(judged.map((seat) => ({ seat: seat.seat, ...seat.promised })))}.`,
-      why: "Every hold is eventually released and every sale is final: once the time has reached the deadline a hold was granted with, that seat must be back on sale for anybody, while a seat somebody bought must still be theirs however far the clock has moved.",
-      how: "Release a hold by comparing its deadline with the current time on every read, and carry no deadline on a sold seat so the same comparison can never free a sale.",
+      what: `after ${options.stimulus} the ${seatingAreaOfThreeSeats.length} configured seats read ${summarise(observed)} instead of ${summarise(promised)}.`,
+      why: "Every hold is eventually released and every sale is final: once the time has reached the deadline a hold was granted with, that seat must be back on sale for anybody, with nobody holding it and no deadline left on it, while a seat somebody bought must still be theirs however far the clock has moved. A seat the walk never left anything on must read free in exactly the same way.",
+      how: "Release a hold by comparing its deadline with the current time on every read, report a seat with no live hold as free with no holder and no deadline, and carry no deadline on a sold seat so the same comparison can never free a sale.",
     }),
-  ).toEqual(judged.map((seat) => ({ seat: seat.seat, ...seat.promised })));
+  ).toEqual(promised);
 };
 
 const aSeatOfTheArea = fc.constantFrom(...seatingAreaOfThreeSeats);
 const aBooker = fc.constantFrom(...bookers);
+const aHoldCommand = fc.record({ kind: fc.constant("hold" as const), seat: aSeatOfTheArea, booker: aBooker });
 const aWalkCommand = fc.oneof(
-  { arbitrary: fc.record({ kind: fc.constant("hold" as const), seat: aSeatOfTheArea, booker: aBooker }), weight: 4 },
+  { arbitrary: aHoldCommand, weight: 4 },
   { arbitrary: fc.record({ kind: fc.constant("cancel" as const), seat: aSeatOfTheArea }), weight: 2 },
   { arbitrary: fc.record({ kind: fc.constant("confirm" as const), seat: aSeatOfTheArea }), weight: 2 },
   {
@@ -944,6 +1234,10 @@ const aWalkCommand = fc.oneof(
     weight: 3,
   },
 );
+
+const aWalkThatBeginsWithAHold = fc
+  .tuple(aHoldCommand, fc.array(aWalkCommand, { minLength: 1, maxLength: 5 }))
+  .map(([opening, rest]): readonly ReleaseWalkCommand[] => [opening, ...rest]);
 
 const holdOf = (seat: SeatId, booker: BookerName): ReleaseWalkCommand => ({ kind: "hold", seat, booker });
 const confirmOf = (seat: SeatId): ReleaseWalkCommand => ({ kind: "confirm", seat });

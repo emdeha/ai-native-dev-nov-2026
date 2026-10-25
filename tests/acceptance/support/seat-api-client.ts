@@ -36,6 +36,12 @@ const RefusalBodySchema = z.object({
   message: z.string().min(1),
 });
 
+const RefusalBodyWithAnyReasonSchema = z.object({
+  reason: z.string().min(1),
+  message: z.string().min(1),
+});
+const AnswerFieldsSchema = z.record(z.string(), z.unknown());
+
 export type SeatReport = z.infer<typeof SeatReportSchema>;
 export type RefusalReason = z.infer<typeof RefusalBodySchema>["reason"];
 
@@ -87,12 +93,29 @@ export type ReleasedSeat = {
   readonly rawBody: string;
 };
 
+export type RefusalWithAnyReason = {
+  readonly tag: "refused-for-any-reason";
+  readonly statusCode: number;
+  readonly reasonCode: string;
+  readonly message: string;
+  readonly rawBody: string;
+};
+export type NotARefusal = { readonly tag: "not-a-refusal"; readonly why: string };
+export type RefusalReading = RefusalWithAnyReason | NotARefusal;
+
 export type HoldOutcome = GrantedHold | RefusedCommand | UnreadableAnswer | NoAnswer;
 export type ConfirmOutcome = ConfirmedSale | RefusedCommand | UnreadableAnswer | NoAnswer;
 export type CancelOutcome = ReleasedSeat | RefusedCommand | UnreadableAnswer | NoAnswer;
 export type SeatObservation = ReportedSeat | RefusedCommand | UnreadableAnswer | NoAnswer;
 export type SeatingAreaObservation = ReportedSeatingArea | UnreadableAnswer | NoAnswer;
 export type ClockObservation = ReportedTime | RefusedCommand | UnreadableAnswer | NoAnswer;
+export type AnyObservation =
+  | HoldOutcome
+  | ConfirmOutcome
+  | CancelOutcome
+  | SeatObservation
+  | SeatingAreaObservation
+  | ClockObservation;
 
 export const summarise = (observation: unknown): string => JSON.stringify(observation);
 
@@ -320,16 +343,7 @@ export const seatingArea = async (options: {
     : { tag: "unreadable", statusCode: answer.status, why: body.why, rawBody: answer.rawBody };
 };
 
-export const advanceClock = async (options: {
-  readonly service: SeatingService;
-  readonly seconds: number;
-}): Promise<ClockObservation> => {
-  const answer = await send({
-    service: options.service,
-    method: "POST",
-    route: "/demo/clock/advance",
-    body: { seconds: options.seconds },
-  });
+const interpretClock = (answer: Answer): ClockObservation => {
   if (answer.tag === "no-answer") {
     return answer;
   }
@@ -347,5 +361,78 @@ export const advanceClock = async (options: {
     statusCode: answer.status,
     why: `${answer.status} is not a status the seating service promises for the demonstration clock`,
     rawBody: answer.rawBody,
+  };
+};
+
+export const advanceClock = async (options: {
+  readonly service: SeatingService;
+  readonly seconds: number;
+}): Promise<ClockObservation> =>
+  interpretClock(
+    await send({
+      service: options.service,
+      method: "POST",
+      route: "/demo/clock/advance",
+      body: { seconds: options.seconds },
+    }),
+  );
+
+export const advanceClockWithBody = async (options: {
+  readonly service: SeatingService;
+  readonly body: unknown;
+}): Promise<ClockObservation> =>
+  interpretClock(
+    await send({
+      service: options.service,
+      method: "POST",
+      route: "/demo/clock/advance",
+      body: options.body,
+    }),
+  );
+
+export const fieldsOfTheAnswer = (rawBody: string): readonly string[] => {
+  const decoded: unknown = (() => {
+    try {
+      return JSON.parse(rawBody);
+    } catch {
+      return undefined;
+    }
+  })();
+  const parsed = AnswerFieldsSchema.safeParse(decoded);
+  return parsed.success ? Object.keys(parsed.data).sort() : [];
+};
+
+export const refusalWhateverTheReason = (observation: AnyObservation): RefusalReading => {
+  if (observation.tag === "no-answer") {
+    return { tag: "not-a-refusal", why: observation.why };
+  }
+  if (observation.tag === "refused") {
+    return {
+      tag: "refused-for-any-reason",
+      statusCode: observation.statusCode,
+      reasonCode: observation.reasonCode,
+      message: observation.message,
+      rawBody: observation.rawBody,
+    };
+  }
+  if (observation.tag === "unreadable") {
+    const body = read(RefusalBodyWithAnyReasonSchema, observation.rawBody);
+    if (body.tag === "read" && observation.statusCode >= 400) {
+      return {
+        tag: "refused-for-any-reason",
+        statusCode: observation.statusCode,
+        reasonCode: body.value.reason,
+        message: body.value.message,
+        rawBody: observation.rawBody,
+      };
+    }
+    return {
+      tag: "not-a-refusal",
+      why: `the seating service answered ${observation.statusCode} with a body no refusal shape explains (${observation.why})`,
+    };
+  }
+  return {
+    tag: "not-a-refusal",
+    why: `the seating service answered ${summarise(observation)} instead of refusing the command`,
   };
 };

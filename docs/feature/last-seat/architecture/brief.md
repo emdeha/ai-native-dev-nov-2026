@@ -105,9 +105,10 @@
   src/app and nothing from src/adapter. The dependency direction points inward,
   so the pure transition stays testable and the Agda proof keeps a matching
   runtime subject.
-- D-demo-operation-marked: The demo clock operation lives under the /demo prefix
-  and every response it returns carries a field that marks it as
-  demonstration-only, so no reader mistakes it for production behaviour.
+- D-demo-operation-marked: The demonstration-only nature of the clock operation
+  is carried by its route path alone: it is reachable only under the /demo
+  prefix. Its answer body is the current time alone, as {"now": \<whole
+  seconds>}, and carries no field that marks the response as demonstration-only.
 - T-build-metadata: The manifest, the lock file, the TypeScript configuration
   and the test runner configuration are test substrate, not product. The
   acceptance designer writes them before the first oracle runs, because every
@@ -144,9 +145,10 @@
   is reused as the native runner.
 - B-driving-port: The driving port is the HTTP API served by the Node.js http
   server on a configured port. Every acceptance observation is made through it.
-- B-driven-clock: The Clock port answers the current time in seconds. The
-  production adapter reads the system clock. The demo adapter adds an offset
-  that the demo advance operation increases.
+- B-driven-clock: The Clock port answers the current time in whole seconds. One
+  adapter implements it: an advanceable clock seeded once from the system clock
+  when the service starts, holding an offset that the demo advance operation
+  increases.
 - B-driven-store: The SeatStore port reads the record of one seat and writes a
   replacement record. The only adapter keeps a frozen map in process memory.
 - B-driven-references: The HoldReferences port issues one fresh opaque hold
@@ -240,15 +242,15 @@
   /seats.
 - PO-shared-expected: The first GET /seats answers 200 with a JSON body listing
   exactly the three configured seat identifiers, each with status 'free' and
-  with no holder and no deadline. The advance answers 200 with a time thirty
-  seconds later than the time it reports before the call, and marks itself
-  demonstration-only. The second GET /seats still lists the same three free
-  seats, because moving the clock changes no seat that is free.
+  with no holder and no deadline. The advance answers 200 with the body {"now":
+  \<whole seconds>} and no other field, reporting a time thirty seconds later
+  than the time reported before the call. The second GET /seats still lists the
+  same three free seats, because moving the clock changes no seat that is free.
 - PO-shared-falsifier: The oracle fails if the list is missing a configured
   seat, holds a seat that was never configured, reports any status other than
-  'free', leaks a hold reference field, answers prose instead of JSON, or if the
-  advance operation does not move the reported time by exactly the seconds it
-  was given.
+  'free', leaks a hold reference field, answers prose instead of JSON, if the
+  advance answer carries any field besides now, or if the advance operation does
+  not move the reported time by exactly the seconds it was given.
 - O-seat-report: The report of one seat, as the HTTP API answers it: the seat
   identifier and either free, or held with the holder name and the deadline, or
   sold with the owner name.
@@ -377,8 +379,6 @@
   404 with reason code no-such-hold.
 - W-case-no-seat: A request for an unknown seat answers 404 with reason code
   no-such-seat.
-- W-case-invalid: A body that fails its schema answers 400 with reason code
-  invalid-request and the field path.
 - W-finite-reason: The response shapes and the refusal reason codes are a closed
   finite set, so named cases cover the whole domain and generation would add no
   reachable case.
@@ -776,6 +776,48 @@
   noFallthroughCasesInSwitch. vitest.config.ts includes tests/**/*.test.ts and
   nothing else. No script beyond what the verification argv already calls is
   needed.
+- W-case-invalid-booker: A hold whose body does not name the booker answers 400
+  with reason code invalid-request and the path of the field that failed.
+- W-case-invalid-holdref: A confirm or a cancel whose path carries a hold
+  reference that is not a UUID answers 400 with reason code invalid-request and
+  the path of the field that failed.
+- W-case-invalid-advance: A demo clock advance whose body does not carry a
+  positive whole number of seconds answers 400 with reason code invalid-request
+  and the path of the field that failed.
+- D-one-clock-adapter: The composition root in src/main.ts wires exactly one
+  clock adapter, the advanceable clock of the Clock port, seeded from the system
+  clock at start with a zero offset. No separate production clock adapter ships,
+  because that clock with a zero offset already answers the system time and a
+  second adapter nothing calls would be a name with no caller.
+- D-cancel-on-sold-reason-undeclared: A cancel presented for a seat that is
+  already sold is refused and changes nothing. The reason code of that refusal
+  is undeclared: the oracle asserts the refusal and that the seat report and the
+  seating area are unchanged, and asserts no reason code for it.
+- D-schema-refusal-coverage: Each schema refusal of the wire is a case of its
+  own: a hold that does not name the booker, a confirm or cancel path parameter
+  that is not a UUID, and a demo clock advance that is not a positive whole
+  number of seconds. Value 1 carries the missing booker case and the advance
+  case, because the hold route and the demo clock route ship in value 1. Value 2
+  and value 4 carry the non-UUID hold reference case, because the confirm route
+  ships in value 2 and the cancel route ships in value 4, and a path parameter
+  of a route that does not yet exist cannot be refused for its shape.
+- D-shared-obligation-in-value-1: The shared walking-skeleton obligation is
+  discharged inside the value 1 oracle at
+  tests/acceptance/hold-a-free-seat.test.ts, which carries it as an acceptance
+  obligation of value 1: before any command GET /seats lists every configured
+  seat exactly once, free, with no holder and no deadline, the demo clock
+  operation answers {"now": \<whole seconds>}, and an advance moves the reported
+  time by exactly the seconds it was given. No separate shared oracle file
+  ships.
+- D-wire-contract-pinned: The wire contract is: the service starts with 'node
+  src/main.ts' and reads the seat inventory from SEAT_INVENTORY, the hold
+  duration from HOLD_DURATION_SECONDS and the listening port from PORT, bound to
+  127.0.0.1. A seat report carries seatId, status, the holder of a held seat or
+  the owner of a sold seat, and the deadline of a held seat. A successful
+  confirm and a successful cancel answer 200 with the report of that seat. A
+  refusal answers {reason, message}. The demo clock answers {now}. There is no
+  read-only clock route. No seat report and no seating-area answer carries a
+  hold reference.
 
 ### Targets (Shared design)
 
@@ -802,11 +844,14 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, D-substrate-policy
+D-demo-operation-marked, D-agda-mutant-rejected, D-substrate-policy,
+D-one-clock-adapter, D-cancel-on-sold-reason-undeclared,
+D-schema-refusal-coverage, D-shared-obligation-in-value-1,
+D-wire-contract-pinned
 
 ### Oracle (Shared design)
 
-tests/acceptance/seating-area-is-reported.test.ts
+tests/acceptance/hold-a-free-seat.test.ts
 
 ### Acceptance supports (Shared design)
 
@@ -1566,7 +1611,13 @@ None
                     "ref": "W-case-no-seat"
                   },
                   {
-                    "ref": "W-case-invalid"
+                    "ref": "W-case-invalid-booker"
+                  },
+                  {
+                    "ref": "W-case-invalid-holdref"
+                  },
+                  {
+                    "ref": "W-case-invalid-advance"
                   }
                 ],
                 "reason": {
@@ -3387,7 +3438,7 @@ npm ci
 Verification command:
 
 ```sh
-npx vitest run tests/acceptance/seating-area-is-reported.test.ts
+npx vitest run tests/acceptance/hold-a-free-seat.test.ts
 ```
 
 Verification command:
@@ -3400,12 +3451,6 @@ Verification command:
 
 ```sh
 npx vitest run tests/architecture/dependency-direction.test.ts
-```
-
-Verification command:
-
-```sh
-npx vitest run tests/acceptance/hold-a-free-seat.test.ts
 ```
 
 Verification command:
@@ -3450,7 +3495,9 @@ npx vitest run tests/acceptance/every-hold-is-released.test.ts
   seat.
 - V1-decision: Value 1 changes no shared decision. It extends the modules the
   shared slice created, keeps the one expiry projection, the one writer and the
-  declared HTTP surface, and adds no new port.
+  declared HTTP surface, and adds no new port. Its oracle also carries the
+  shared walking-skeleton obligation and the two schema refusals its shipped
+  routes can reach.
 - V1-prefactoring: Value 1 adds behaviour to modules the shared slice created
   and moves no behaviour between them, so there is no preserving move to observe
   before and after.
@@ -3464,21 +3511,36 @@ npx vitest run tests/acceptance/every-hold-is-released.test.ts
   not been reached, while the other seats of the seating area are unchanged.
 - V1-sti: Start the service with the inventory ['s11','s12','s13'], a hold
   duration of 120 seconds and a clock the test controls, on an ephemeral port.
-  Read the current time T from the demonstration clock operation. Send POST
-  /seats/s12/holds with the body {"booker":"A"}. Then send GET /seats/s12, then
-  advance the clock by 119 seconds and send GET /seats/s12 again, and finally
-  send GET /seats.
-- V1-exp: The hold answers 201 with a hold reference in UUID form and a deadline
-  equal to T plus 120, where the test adds the duration it configured to the
-  time it read, and does not take the service's word for it. The first GET
-  /seats/s12 answers 200 with status held, holder 'A' and the same deadline, and
-  with no hold reference field anywhere in the body. After 119 seconds the seat
-  is still reported held for 'A' with the same deadline. GET /seats lists
-  exactly s11, s12 and s13, with s11 and s13 still free.
-- V1-fal: The oracle fails if the deadline differs from the independently
-  computed sum, if the held report does not name the booker, if any response
-  body carries the hold reference after the hold itself, if s11 or s13 changes,
-  or if the seat stops being reported held before its deadline is reached.
+  Read GET /seats before any command and read the current time T from the
+  demonstration clock operation. Send POST /seats/s12/holds with the body
+  {"booker":"A"}. Then send GET /seats/s12, then advance the clock by 119
+  seconds and send GET /seats/s12 again, and then send GET /seats. Finally send
+  POST /demo/clock/advance once with zero seconds and once with a number of
+  seconds that is not whole, and send POST /seats/s11/holds with a body that
+  names no booker.
+- V1-exp: The GET /seats taken before any command answers 200 and lists exactly
+  s11, s12 and s13, each with status free, with no holder and no deadline. The
+  demonstration clock answers 200 with the body {"now": \<whole seconds>} and no
+  other field. The hold answers 201 with a hold reference in UUID form and a
+  deadline equal to T plus 120, where the test adds the duration it configured
+  to the time it read, and does not take the service's word for it. The first
+  GET /seats/s12 answers 200 with status held, holder 'A' and the same deadline,
+  and with no hold reference field anywhere in the body. The advance of 119
+  seconds moves the reported time by exactly 119 seconds, and the seat is still
+  reported held for 'A' with the same deadline. GET /seats lists exactly s11,
+  s12 and s13, with s11 and s13 still free. The advance of zero seconds, the
+  advance of a number that is not whole, and the hold that names no booker each
+  answer 400 with reason code invalid-request and the path of the field that
+  failed, and none of them moves the reported time or changes any seat.
+- V1-fal: The oracle fails if the seating area read before any command is
+  missing a configured seat or reports one as anything but free, if the
+  demonstration clock answer carries any field besides now, if an advance does
+  not move the reported time by exactly the seconds it was given, if the
+  deadline differs from the independently computed sum, if the held report does
+  not name the booker, if any response body carries the hold reference after the
+  hold itself, if s11 or s13 changes, if the seat stops being reported held
+  before its deadline is reached, or if an advance of zero seconds, an advance
+  of a number that is not whole or a hold that names no booker is accepted.
 
 ### Targets (Value 1)
 
@@ -3501,7 +3563,9 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, V1-decision, D-substrate-policy
+D-demo-operation-marked, D-agda-mutant-rejected, V1-decision,
+D-substrate-policy, D-schema-refusal-coverage, D-shared-obligation-in-value-1,
+D-wire-contract-pinned, D-one-clock-adapter
 
 ### Oracle (Value 1)
 
@@ -3837,7 +3901,9 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, V2-decision, D-substrate-policy
+D-demo-operation-marked, D-agda-mutant-rejected, V2-decision,
+D-substrate-policy, D-schema-refusal-coverage, D-wire-contract-pinned,
+D-one-clock-adapter
 
 ### Oracle (Value 2)
 
@@ -4174,7 +4240,9 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, V3-decision, D-substrate-policy
+D-demo-operation-marked, D-agda-mutant-rejected, V3-decision,
+D-substrate-policy, D-wire-contract-pinned, D-one-clock-adapter,
+D-cancel-on-sold-reason-undeclared
 
 ### Oracle (Value 3)
 
@@ -4497,7 +4565,9 @@ D-public-report-hides-reference, D-paradigm-functional, D-checker-mapping,
 D-http-surface, D-node-http-server, D-zod-boundary, D-open-business-motivation,
 D-open-svelte-client, D-restart-loses-state, D-clock-never-moves-back,
 D-simulation-is-not-verification, D-model-limits, D-dependency-direction-law,
-D-demo-operation-marked, D-agda-mutant-rejected, V4-decision, D-substrate-policy
+D-demo-operation-marked, D-agda-mutant-rejected, V4-decision,
+D-substrate-policy, D-schema-refusal-coverage, D-wire-contract-pinned,
+D-one-clock-adapter, D-cancel-on-sold-reason-undeclared
 
 ### Oracle (Value 4)
 

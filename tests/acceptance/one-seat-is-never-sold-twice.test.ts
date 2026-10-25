@@ -7,7 +7,9 @@ import {
   cancelHold,
   confirmHold,
   holdSeat,
+  refusalWhateverTheReason,
   seatId,
+  seatReport,
   seatingArea,
   summarise,
   type BookerName,
@@ -358,6 +360,43 @@ const asComparableReports = (seats: readonly SeatReport[]) =>
     deadline: report.deadline ?? null,
   }));
 
+const theSeatReportNow = async (options: {
+  readonly service: SeatingService;
+  readonly seat: SeatId;
+}): Promise<SeatReport> => {
+  const observation = await seatReport({ service: options.service, seat: options.seat });
+  if (observation.tag === "reported") {
+    return observation.report;
+  }
+  expect(
+    summarise(observation),
+    whatWhyHow({
+      what: `reading seat ${options.seat} on its own answered ${summarise(observation)} instead of the report of that seat.`,
+      why: "A booker who has just been refused reads the one seat they asked for, so that report must stay readable for the refusal to be shown to have changed nothing.",
+      how: 'Answer a read of one configured seat with HTTP 200 and the report of that seat as JSON: {"seatId": <identifier>, "status": "free" | "held" | "sold", ...}.',
+    }),
+  ).toBe("the report of that seat");
+  return { seatId: String(options.seat), status: "free" };
+};
+
+const thenTheSeatReportIsTheOneTheRulesPromise = (options: {
+  readonly report: SeatReport;
+  readonly seat: SeatId;
+  readonly record: SeatRecord;
+  readonly now: number;
+  readonly stimulus: string;
+}): void => {
+  const promised = reportFromTheRules({ seat: options.seat, record: options.record, now: options.now });
+  expect(
+    asComparableReports([options.report]),
+    whatWhyHow({
+      what: `after ${options.stimulus} the report of seat ${options.seat} reads ${summarise(options.report)} instead of ${summarise(promised)}, which is what it read before.`,
+      why: "A refusal whose reason the seating service never promised must still leave the seat exactly as it was, and the seat read on its own route is where a booker sees that directly.",
+      how: "Decide the refusal before anything is written, and write nothing at all on the refusing path.",
+    }),
+  ).toEqual([promised]);
+};
+
 const expectationForAHold = (options: {
   readonly record: SeatRecord;
   readonly now: number;
@@ -499,18 +538,19 @@ const thenTheAnswerIsTheOneThePromiseGives = (options: {
   readonly stimulus: string;
 }): void => {
   const answered = describeTheAnswer(options.outcome);
-  const promised = describeWhatTheRulesPromise(options.expectation);
   if (options.expectation.tag === "a refusal the promise does not name") {
+    const reading = refusalWhateverTheReason(options.outcome);
     expect(
-      answered.kind,
+      reading.tag === "refused-for-any-reason" ? "a refusal" : reading.why,
       whatWhyHow({
-        what: `${options.stimulus} answered ${summarise(answered)} instead of a refusal.`,
-        why: "A seat that has been bought belongs to its owner for good, so no later request may be answered as a success and quietly take it away again.",
-        how: "Refuse every command that names a seat which has already been sold.",
+        what: `${options.stimulus} answered ${summarise(answered)} instead of a refusal of any kind.`,
+        why: "A seat that has been bought belongs to its owner for good, so no later request may be answered as a success and quietly take it away again. The seating service never promised which reason it gives for this refusal, so any machine reason code is accepted here and only the refusal itself is judged.",
+        how: "Refuse every command that names a seat which has already been sold, with any refusal status and any machine reason code the service chooses, and leave the seat and the seating area exactly as they were.",
       }),
     ).toBe("a refusal");
     return;
   }
+  const promised = describeWhatTheRulesPromise(options.expectation);
   expect(
     answered,
     whatWhyHow({
@@ -630,6 +670,15 @@ const walkOneCommandAtATime = async (options: {
   const after = await theSeatingAreaNow({ service: options.service });
   if (isARefusal(expectation)) {
     thenTheSeatingAreaReadsExactlyAsBefore({ before, after, stimulus });
+  }
+  if (expectation.tag === "a refusal the promise does not name") {
+    thenTheSeatReportIsTheOneTheRulesPromise({
+      report: await theSeatReportNow({ service: options.service, seat: command.seat }),
+      seat: command.seat,
+      record,
+      now: options.state.now,
+      stimulus,
+    });
   }
   const movedOn: WalkState = {
     ...options.state,

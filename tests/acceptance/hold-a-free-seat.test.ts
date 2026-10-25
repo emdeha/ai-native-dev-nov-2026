@@ -2,7 +2,9 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   advanceClock,
+  advanceClockWithBody,
   bookerName,
+  fieldsOfTheAnswer,
   hasOpaqueReferenceShape,
   holdSeat,
   holdSeatWithoutNamingTheBooker,
@@ -10,6 +12,7 @@ import {
   seatReport,
   seatingArea,
   summarise,
+  type AnyObservation,
   type BookerName,
   type ClockObservation,
   type GrantedHold,
@@ -17,6 +20,7 @@ import {
   type RefusedCommand,
   type ReportedSeat,
   type ReportedSeatingArea,
+  type ReportedTime,
   type SeatId,
   type SeatObservation,
   type SeatReport,
@@ -55,7 +59,7 @@ const grantedHold = (options: { readonly outcome: HoldOutcome; readonly stimulus
 };
 
 const refusedCommand = (options: {
-  readonly outcome: HoldOutcome;
+  readonly outcome: AnyObservation;
   readonly stimulus: string;
   readonly expectedReason: string;
 }): RefusedCommand => {
@@ -106,9 +110,12 @@ const reportedSeatingArea = (options: {
   return { tag: "reported", seats: [], rawBody: "" };
 };
 
-const reportedTime = (options: { readonly observation: ClockObservation; readonly stimulus: string }): number => {
+const reportedClock = (options: {
+  readonly observation: ClockObservation;
+  readonly stimulus: string;
+}): ReportedTime => {
   if (options.observation.tag === "reported") {
-    return options.observation.nowSeconds;
+    return options.observation;
   }
   expect(
     summarise(options.observation),
@@ -118,8 +125,43 @@ const reportedTime = (options: { readonly observation: ClockObservation; readonl
       how: 'Answer the demonstration clock with HTTP 200 and a JSON body carrying {"now": <whole seconds>} after the clock has moved.',
     }),
   ).toBe("the time the seating service is using");
-  return Number.NaN;
+  return { tag: "reported", nowSeconds: Number.NaN, rawBody: "" };
 };
+
+const reportedTime = (options: { readonly observation: ClockObservation; readonly stimulus: string }): number =>
+  reportedClock(options).nowSeconds;
+
+const fullReportOf = (
+  report: SeatReport,
+): { seatId: string; status: string; holder: string | null; deadline: number | null; owner: string | null } => ({
+  seatId: report.seatId,
+  status: report.status,
+  holder: report.holder ?? null,
+  deadline: report.deadline ?? null,
+  owner: report.owner ?? null,
+});
+
+const aFreeSeatReport = (
+  seat: string,
+): { seatId: string; status: string; holder: string | null; deadline: number | null; owner: string | null } => ({
+  seatId: seat,
+  status: "free",
+  holder: null,
+  deadline: null,
+  owner: null,
+});
+
+const aHeldSeatReport = (options: {
+  readonly seat: string;
+  readonly holder: string;
+  readonly deadlineSeconds: number;
+}): { seatId: string; status: string; holder: string | null; deadline: number | null; owner: string | null } => ({
+  seatId: options.seat,
+  status: "held",
+  holder: options.holder,
+  deadline: options.deadlineSeconds,
+  owner: null,
+});
 
 const givenAFreeSeatingAreaOfThreeSeats = async (options: {
   readonly holdDurationSeconds: number;
@@ -226,7 +268,155 @@ const thenNoAnswerCarriesTheHoldReference = (options: {
   ).toEqual([]);
 };
 
+const whenTheDemonstrationClockIsMovedOnBy = async (options: {
+  readonly service: SeatingService;
+  readonly seconds: number;
+}): Promise<ReportedTime> =>
+  reportedClock({
+    observation: await advanceClock({ service: options.service, seconds: options.seconds }),
+    stimulus: `moving the demonstration clock on by ${options.seconds} seconds`,
+  });
+
+const whenTheDemonstrationClockIsAskedToMoveBy = async (options: {
+  readonly service: SeatingService;
+  readonly body: unknown;
+}): Promise<ClockObservation> => advanceClockWithBody({ service: options.service, body: options.body });
+
+type SeatingAreaAnOrganizerMayConfigure = {
+  readonly description: string;
+  readonly seats: readonly SeatId[];
+};
+
+const seatingAreasAnOrganizerMayConfigure: readonly SeatingAreaAnOrganizerMayConfigure[] = [
+  { description: "the three seats s11, s12 and s13", seats: seatingAreaOfThreeSeats },
+  { description: "the two seats a1 and a2", seats: [seatId("a1"), seatId("a2")] },
+  { description: "the single seat only-seat", seats: [seatId("only-seat")] },
+];
+
+type AdvanceThatIsNotAPositiveWholeNumberOfSeconds = {
+  readonly description: string;
+  readonly body: unknown;
+};
+
+const advancesTheServiceCannotMake: readonly AdvanceThatIsNotAPositiveWholeNumberOfSeconds[] = [
+  { description: "an advance of zero seconds", body: { seconds: 0 } },
+  { description: "an advance of a negative number of seconds", body: { seconds: -5 } },
+  { description: "an advance of a number of seconds that is not whole", body: { seconds: 0.5 } },
+];
+
 describe("Holding a free seat", () => {
+  it.each(seatingAreasAnOrganizerMayConfigure)(
+    "the seating area configured as $description is reported with every seat free before any command [po-shared-seating-area-is-reported]",
+    async (configured: SeatingAreaAnOrganizerMayConfigure) => {
+      const service = await startTestService({
+        inventory: configured.seats,
+        holdDurationSeconds: twoMinutes,
+      });
+      try {
+        const beforeAnyCommand = await theSeatingAreaNow({ service });
+
+        expect(
+          beforeAnyCommand.seats.map(fullReportOf),
+          whatWhyHow({
+            what: `the seating area read before any command is ${summarise(beforeAnyCommand.seats)} instead of the configured seats ${configured.seats.join(", ")}, each free with no holder, no deadline and no owner.`,
+            why: "A booker opening the seating area of a fresh event must see exactly the seats the organizer configured, each exactly once, and see that each of them can still be booked.",
+            how: "Load the configured inventory at start, report every configured seat exactly once in the configured order and no seat the organizer did not configure, and report a seat nobody holds as free with no holder, no deadline and no owner.",
+          }),
+        ).toEqual(configured.seats.map((seat) => aFreeSeatReport(String(seat))));
+      } finally {
+        await service.stop();
+      }
+    },
+  );
+
+  it("the demonstration clock answers the time the service is using and moves it by exactly the seconds it is given [po-shared-seating-area-is-reported]", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 5 * twoMinutes }), async (secondsToMoveOn) => {
+        const service = await givenAFreeSeatingAreaOfThreeSeats({ holdDurationSeconds: twoMinutes });
+        try {
+          const timeBefore = await whenTheDemonstrationClockIsMovedOnBy({ service, seconds: 1 });
+
+          const answer = await whenTheDemonstrationClockIsMovedOnBy({ service, seconds: secondsToMoveOn });
+
+          expect(
+            fieldsOfTheAnswer(answer.rawBody),
+            whatWhyHow({
+              what: `the demonstration clock answered the fields ${summarise(fieldsOfTheAnswer(answer.rawBody))} instead of the time alone.`,
+              why: "The demonstration clock is reachable only under the demonstration route, and its answer promises the time the service is using and nothing else a client could come to depend on.",
+              how: 'Answer the demonstration advance with HTTP 200 and the JSON body {"now": <whole seconds>}, carrying no other field.',
+            }),
+          ).toEqual(["now"]);
+          expect(
+            answer.nowSeconds,
+            whatWhyHow({
+              what: `advancing the demonstration clock by ${secondsToMoveOn} seconds moved the reported time from ${timeBefore.nowSeconds} to ${answer.nowSeconds} instead of ${timeBefore.nowSeconds + secondsToMoveOn}.`,
+              why: "Every deadline is judged against the time the service reports, so a demonstration that moves the clock by a known amount must move that time by exactly that amount, however large the jump.",
+              how: "Hold one offset, add exactly the seconds the advance was given to it, and answer the resulting whole second.",
+            }),
+          ).toBe(timeBefore.nowSeconds + secondsToMoveOn);
+        } finally {
+          await service.stop();
+        }
+      }),
+      { numRuns: 8, examples: [[1], [5 * twoMinutes]] },
+    );
+  });
+
+  it.each(advancesTheServiceCannotMake)(
+    "$description is refused and leaves the seating area and the reported time untouched [law-wire-shape W-case-invalid-advance]",
+    async (invalidAdvance: AdvanceThatIsNotAPositiveWholeNumberOfSeconds) => {
+      const service = await givenAFreeSeatingAreaOfThreeSeats({ holdDurationSeconds: twoMinutes });
+      try {
+        const timeBefore = await givenTheClockHasMovedOn({ service, seconds: 1 });
+        const seatingAreaBefore = (await theSeatingAreaNow({ service })).seats;
+
+        const observation = await whenTheDemonstrationClockIsAskedToMoveBy({
+          service,
+          body: invalidAdvance.body,
+        });
+
+        const refused = refusedCommand({
+          outcome: observation,
+          stimulus: `asking the demonstration clock for ${invalidAdvance.description}`,
+          expectedReason: "invalid-request",
+        });
+        expect(
+          {
+            statusCode: refused.statusCode,
+            reasonCode: refused.reasonCode,
+            carriesAHumanMessage: refused.message.length > 0,
+            namesTheField: refused.rawBody.includes("seconds"),
+          },
+          whatWhyHow({
+            what: `${invalidAdvance.description} answered ${summarise(refused)} instead of a refusal naming the field that failed.`,
+            why: "The clock only ever moves forward by whole seconds, and a caller can repair its request only when the answer says which field was wrong.",
+            how: 'Refuse an advance that is not a positive whole number of seconds with HTTP 400, the reason code "invalid-request", a human message and the path of the field that failed.',
+          }),
+        ).toEqual({ statusCode: 400, reasonCode: "invalid-request", carriesAHumanMessage: true, namesTheField: true });
+        const seatingAreaAfter = (await theSeatingAreaNow({ service })).seats;
+        expect(
+          seatingAreaAfter,
+          whatWhyHow({
+            what: `after ${invalidAdvance.description} the seating area reads ${summarise(seatingAreaAfter)} instead of ${summarise(seatingAreaBefore)}.`,
+            why: "A refused request must change nothing a reader can see, so a rejected demonstration advance can never take, release or extend a seat.",
+            how: "Validate the body before anything is written, and write nothing on the refusing path.",
+          }),
+        ).toEqual(seatingAreaBefore);
+        const timeAfter = await givenTheClockHasMovedOn({ service, seconds: 1 });
+        expect(
+          timeAfter,
+          whatWhyHow({
+            what: `after ${invalidAdvance.description} and one second of demonstration time the service reports ${timeAfter} instead of ${timeBefore + 1}.`,
+            why: "A refused advance must leave the time the service is using exactly where it was, because every deadline is judged against that time.",
+            how: "Move the clock only after the advance has been accepted, and only by the seconds it was given.",
+          }),
+        ).toBe(timeBefore + 1);
+      } finally {
+        await service.stop();
+      }
+    },
+  );
+
   it("a booker holds a free seat and sees it held for them until the stated deadline", async () => {
     const service = await givenAFreeSeatingAreaOfThreeSeats({ holdDurationSeconds: twoMinutes });
     try {
@@ -257,16 +447,16 @@ describe("Holding a free seat", () => {
       });
       const wholeSeatingArea = await theSeatingAreaNow({ service });
       expect(
-        wholeSeatingArea.seats.map((seat) => ({ seatId: seat.seatId, status: seat.status })),
+        wholeSeatingArea.seats.map(fullReportOf),
         whatWhyHow({
-          what: `the seating area is reported as ${summarise(wholeSeatingArea.seats)} instead of the three configured seats with only ${theChosenSeat} held.`,
-          why: "Holding one seat must take that seat and no other, and the seating area is fixed when the service starts.",
-          how: "Report every configured seat exactly once, in the configured order, and change only the seat that was held.",
+          what: `the seating area is reported as ${summarise(wholeSeatingArea.seats)} instead of the three configured seats with only ${theChosenSeat} held for ${bookers[0]} until ${granted.deadlineSeconds}, s11 and s13 untouched.`,
+          why: "Holding one seat must take that seat and no other: a seat somebody else can still book must carry no holder, no deadline and no owner.",
+          how: "Report every configured seat exactly once, in the configured order, change only the seat that was held, and leave every other seat free with no holder, no deadline and no owner.",
         }),
       ).toEqual([
-        { seatId: "s11", status: "free" },
-        { seatId: "s12", status: "held" },
-        { seatId: "s13", status: "free" },
+        aFreeSeatReport("s11"),
+        aHeldSeatReport({ seat: "s12", holder: String(bookers[0]), deadlineSeconds: granted.deadlineSeconds }),
+        aFreeSeatReport("s13"),
       ]);
       thenNoAnswerCarriesTheHoldReference({
         bodies: [atTheGrant.rawBody, oneSecondBeforeTheDeadline.rawBody, wholeSeatingArea.rawBody],
@@ -638,7 +828,7 @@ describe("Holding a free seat", () => {
     }
   });
 
-  it("a hold that names no booker is refused and names the missing field [law-wire-shape]", async () => {
+  it("a hold that names no booker is refused and names the missing field [law-wire-shape W-case-invalid-booker]", async () => {
     const service = await givenAFreeSeatingAreaOfThreeSeats({ holdDurationSeconds: twoMinutes });
     try {
       const outcome = await holdSeatWithoutNamingTheBooker({ service, seat: theChosenSeat });
