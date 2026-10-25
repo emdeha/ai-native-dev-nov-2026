@@ -75,7 +75,14 @@ export type ReportedTime = {
   readonly rawBody: string;
 };
 
+export type ConfirmedSale = {
+  readonly tag: "confirmed";
+  readonly report: SeatReport;
+  readonly rawBody: string;
+};
+
 export type HoldOutcome = GrantedHold | RefusedCommand | UnreadableAnswer | NoAnswer;
+export type ConfirmOutcome = ConfirmedSale | RefusedCommand | UnreadableAnswer | NoAnswer;
 export type SeatObservation = ReportedSeat | RefusedCommand | UnreadableAnswer | NoAnswer;
 export type SeatingAreaObservation = ReportedSeatingArea | UnreadableAnswer | NoAnswer;
 export type ClockObservation = ReportedTime | RefusedCommand | UnreadableAnswer | NoAnswer;
@@ -199,6 +206,36 @@ export const holdSeatWithoutNamingTheBooker = async (options: {
       body: {},
     }),
   );
+
+export const confirmHold = async (options: {
+  readonly service: SeatingService;
+  readonly seat: SeatId;
+  readonly holdReference: string;
+}): Promise<ConfirmOutcome> => {
+  const answer = await send({
+    service: options.service,
+    method: "POST",
+    route: `/seats/${options.seat}/holds/${options.holdReference}/confirm`,
+  });
+  if (answer.tag === "no-answer") {
+    return answer;
+  }
+  if (answer.status === 200) {
+    const body = read(SeatReportSchema, answer.rawBody);
+    return body.tag === "read"
+      ? { tag: "confirmed", report: body.value, rawBody: answer.rawBody }
+      : { tag: "unreadable", statusCode: answer.status, why: body.why, rawBody: answer.rawBody };
+  }
+  if (isRefusalStatus(answer.status)) {
+    return refusal(answer);
+  }
+  return {
+    tag: "unreadable",
+    statusCode: answer.status,
+    why: `${answer.status} is not a status the seating service promises for a confirmation`,
+    rawBody: answer.rawBody,
+  };
+};
 
 export const seatReport = async (options: {
   readonly service: SeatingService;

@@ -32,3 +32,31 @@
 - `tests/architecture/dependency-direction.test.ts`
 - `tsconfig.json`
 - `vitest.config.ts`
+###     Through the HTTP API, the holder confirms their held seat before its deadline and the seat is then reported as sold to that holder.
+
+## Acceptance Obligations
+| ID | Stimulus | Expected result |
+| --- | --- | --- |
+| V2-obs | The booker holding a seat confirms it one second before the deadline, and the clock then moves far past that old deadline. | The confirmation reports the seat sold to that booker, the seat report says sold with the owner named, no deadline and no hold reference, and the report long after the old deadline is identical. |
+| law-deadline-is-authoritative | A confirmation of a held seat sent at a generated moment, including exactly one second before the deadline, exactly at the deadline and long after it. | Before the deadline the seat is sold to the holder; from the deadline second on the confirmation is refused as expired, the seat is reported free and the seating area is unchanged. |
+| law-only-the-holder-acts | A booker who holds one seat confirms another booker's seat with the reference of their own hold. | The confirmation is refused as an unknown hold, the other booker keeps the seat held until the same deadline, and the seating area is unchanged. |
+| law-sold-is-absorbing | After a sale, a hold by another booker, a second confirmation with the old reference and a clock advance follow in a generated order. | After every one of those commands the seat is still reported sold to the first owner, with no deadline and no holder. |
+| cc-sold-has-no-deadline | The seat report and the seating area are read right after a sale and again long after the deadline the hold had. | A sold seat carries an owner only: no deadline and no hold reference appear in any answer, so no expiry can ever release it. |
+| law-wire-shape:W-case-confirmed | A confirmation sent by the holder before the deadline. | HTTP 200 with the report of that seat as sold to the holder. |
+| law-wire-shape:W-case-no-hold | A confirmation carrying a reference the seating service never granted. | HTTP 404 with reason code no-such-hold, no reference of any live hold in the answer, and an unchanged seating area. |
+| law-wire-shape:W-case-no-seat | A confirmation naming a seat the seating area does not have. | HTTP 404 with reason code no-such-seat and the identifier that was sent. |
+| law-wire-shape:W-case-sold | A second confirmation of a sold seat, and a hold asked for that sold seat by another booker. | HTTP 409 with reason code seat-sold in both cases, and the seat still reported sold to its owner. |
+| law-refusal-is-inert | Every refused confirmation of this value: expired, wrong reference, unknown reference, already sold. | The seating area read after the refusal is identical to the one read immediately before it. |
+| D-restart-loses-state | The service is restarted after a seat was bought. | Every seat is free again and the bought seat cannot be told from a seat nobody ever bought. |
+
+## Oracle
+`tests/acceptance/confirm-a-held-seat.test.ts`
+
+## Supports
+- `package-lock.json`
+- `package.json`
+- `tests/acceptance/support/seat-api-client.ts`
+- `tests/acceptance/support/start-test-service.ts`
+- `tsconfig.json`
+- `vitest.config.ts`
+- `tests/architecture/dependency-direction.test.ts`
