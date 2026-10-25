@@ -89,3 +89,28 @@
 - `tsconfig.json`
 - `vitest.config.ts`
 - `tests/architecture/dependency-direction.test.ts`
+###     Through the HTTP API, an unconfirmed hold is released - at once when the holder cancels, and automatically when its deadline passes - and the seat is then reported as free, while a sold seat is never released.
+
+## Acceptance Obligations
+| ID | Stimulus | Expected result |
+| --- | --- | --- |
+| the-holder-gives-the-seat-up | The booker holding a seat sends the cancellation of that hold with the reference the hold was granted with, well before its deadline. | The cancellation answers the seat as free, the seat report is free with no holder and no deadline, and the next booker is granted it with a reference of their own and a deadline of the time of that grant plus the hold duration. |
+| a-hold-nobody-confirms-ends-by-itself | A booker holds a seat and nobody acts until the time the service reports has reached the deadline of that hold. | On the deadline second the seat is reported free, and whoever asks first - including the booker who held it before - is granted it with a new reference and a new deadline. |
+| the-reference-of-a-hold-that-ran-out-buys-nothing | The booker who was holding the seat sends a confirmation carrying their own reference on the deadline second of that hold. | The confirmation is refused with HTTP 409 and the reason code hold-expired, and the seating area reads exactly as it did before. |
+| a-late-cancellation-is-refused | The booker who was holding the seat sends a cancellation carrying their own reference five seconds after the deadline of that hold. | The cancellation is refused with HTTP 409 and the reason code hold-expired, and the seating area reads exactly as it did before. |
+| only-the-hold-s-own-reference-releases-it | A cancellation of a held seat carries the reference of a hold on another seat, and then a reference the service never granted. | Both are refused with HTTP 404 and the reason code no-such-hold, the seat is still held for its booker with the same deadline, and the seating area reads exactly as it did before. |
+| a-refused-hold-never-lengthens-the-hold | A second booker asks halfway through a hold for the seat that is held, is refused, and then the time reaches the deadline the first hold was granted with. | On that deadline second the seat is reported free, and the second booker is then granted it with a deadline of the time of their grant plus the hold duration. |
+| a-bought-seat-is-never-released | A booker buys a seat, the clock moves on by an hour, and a cancellation presenting the reference that bought it is sent. | The seat is still reported sold to its owner with no holder and no deadline, the cancellation is refused, and the seating area reads exactly as it did before. |
+| every-hold-is-released-and-every-sale-survives | Any walk of holds, confirmations, cancellations and clock advances over the configured seats, followed by a wait long enough for every granted hold to run out. | Every seat whose granted deadline the time has reached is reported free, and every seat that was bought is still reported sold to the same booker. |
+
+## Oracle
+`tests/acceptance/every-hold-is-released.test.ts`
+
+## Supports
+- `package-lock.json`
+- `package.json`
+- `tests/acceptance/support/seat-api-client.ts`
+- `tests/acceptance/support/start-test-service.ts`
+- `tsconfig.json`
+- `vitest.config.ts`
+- `tests/architecture/dependency-direction.test.ts`
