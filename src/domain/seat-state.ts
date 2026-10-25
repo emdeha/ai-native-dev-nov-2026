@@ -29,16 +29,19 @@ export type Hold = {
   readonly deadline: Seconds;
 };
 
-export type SeatState =
-  | { readonly status: "free" }
-  | { readonly status: "held"; readonly hold: Hold }
-  | { readonly status: "sold"; readonly owner: BookerName };
+export type FreeSeat = { readonly status: "free" };
 
-export const free: SeatState = { status: "free" };
+export type HeldSeat = { readonly status: "held"; readonly hold: Hold };
 
-export const heldBy = (hold: Hold): SeatState => ({ status: "held", hold });
+export type SoldSeat = { readonly status: "sold"; readonly owner: BookerName };
 
-export const soldTo = (owner: BookerName): SeatState => ({ status: "sold", owner });
+export type SeatState = FreeSeat | HeldSeat | SoldSeat;
+
+export const free: FreeSeat = { status: "free" };
+
+export const heldBy = (hold: Hold): HeldSeat => ({ status: "held", hold });
+
+export const soldTo = (owner: BookerName): SoldSeat => ({ status: "sold", owner });
 
 export const refusalReasons = [
   "hold-expired",
@@ -56,8 +59,9 @@ export type Outcome =
       readonly tag: "granted";
       readonly reference: HoldRef;
       readonly deadline: Seconds;
-      readonly next: SeatState;
+      readonly next: HeldSeat;
     }
+  | { readonly tag: "sold"; readonly next: SoldSeat }
   | { readonly tag: "refused"; readonly reason: RefusalReason };
 
 export const granted = (options: { readonly hold: Hold }): Outcome => ({
@@ -65,6 +69,11 @@ export const granted = (options: { readonly hold: Hold }): Outcome => ({
   reference: options.hold.reference,
   deadline: options.hold.deadline,
   next: heldBy(options.hold),
+});
+
+export const sold = (options: { readonly owner: BookerName }): Outcome => ({
+  tag: "sold",
+  next: soldTo(options.owner),
 });
 
 export const refused = (options: { readonly reason: RefusalReason }): Outcome => ({

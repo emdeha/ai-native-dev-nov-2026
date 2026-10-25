@@ -4,10 +4,11 @@ import {
   advanceRequestSchema,
   clockAnswer,
   failedFields,
-  grantedHoldAnswer,
+  holdPathSchema,
   holdRequestSchema,
   invalidRequestAnswer,
   noSuchSeatAnswer,
+  outcomeAnswer,
   refusalAnswer,
   seatReportAnswer,
   seatingAreaAnswer,
@@ -70,6 +71,34 @@ export const seatRoutes = (options: { readonly service: SeatService }): ((reques
     }
   };
 
+  const refusalForConfirm = (details: { readonly reason: RefusalReason; readonly seatId: SeatId }): Answer => {
+    switch (details.reason) {
+      case "no-such-seat":
+        return noSuchSeatAnswer({ seatId: details.seatId });
+      case "hold-expired":
+        return refusalAnswer({
+          reason: "hold-expired",
+          message: `WHAT: the hold on seat ${details.seatId} has reached its deadline. WHY: the deadline is authoritative and there is no grace window, so the seat is free again from the deadline second on. HOW: read GET /seats and hold seat ${details.seatId} again while it is free.`,
+        });
+      case "no-such-hold":
+        return refusalAnswer({
+          reason: "no-such-hold",
+          message: `WHAT: seat ${details.seatId} has no hold with the reference that was presented. WHY: only the booker the seating area gave the reference to may confirm that hold, and the answer tells nobody whether another hold carries that reference. HOW: present the hold reference the seating area answered when it granted the hold on seat ${details.seatId}.`,
+        });
+      case "seat-sold":
+        return refusalAnswer({
+          reason: "seat-sold",
+          message: `WHAT: seat ${details.seatId} is already sold. WHY: a sale is final, so a sold seat carries no hold that a confirmation could act on. HOW: hold another free seat.`,
+        });
+      case "seat-held":
+      case "invalid-request":
+        return refusalAnswer({
+          reason: details.reason,
+          message: `WHAT: seat ${details.seatId} cannot be confirmed (${details.reason}). WHY: the seating area refused the confirmation for the stated reason. HOW: read GET /seats/${details.seatId} and confirm only a hold the seating area granted to you.`,
+        });
+    }
+  };
+
   const seatAnswer = (details: { readonly seatId: SeatId }): Answer => {
     const reading = service.seatOf({ seatId: details.seatId });
     return reading.tag === "seat"
@@ -87,10 +116,28 @@ export const seatRoutes = (options: { readonly service: SeatService }): ((reques
         fields: failedFields(request.error),
       });
     }
-    const outcome = service.hold({ seatId: details.seatId, booker: request.data.booker });
-    return outcome.tag === "granted"
-      ? grantedHoldAnswer({ reference: outcome.reference, deadline: outcome.deadline })
-      : refusalForHold({ reason: outcome.reason, seatId: details.seatId });
+    return outcomeAnswer({
+      seatId: details.seatId,
+      outcome: service.hold({ seatId: details.seatId, booker: request.data.booker }),
+      refusal: (reason) => refusalForHold({ reason, seatId: details.seatId }),
+    });
+  };
+
+  const confirmAnswer = (details: { readonly seatId: SeatId; readonly rawHoldRef: string }): Answer => {
+    const path = holdPathSchema.safeParse({ holdRef: details.rawHoldRef });
+    if (!path.success) {
+      return invalidRequestAnswer({
+        what: `the confirmation of seat ${details.seatId} does not carry a hold reference the seating area could have issued`,
+        why: "a hold reference is an opaque value the seating area alone issues, so a value of another shape can belong to no hold.",
+        how: "send the hold reference the seating area answered when it granted the hold, exactly as it was given.",
+        fields: failedFields(path.error),
+      });
+    }
+    return outcomeAnswer({
+      seatId: details.seatId,
+      outcome: service.confirm({ seatId: details.seatId, holdRef: path.data.holdRef }),
+      refusal: (reason) => refusalForConfirm({ reason, seatId: details.seatId }),
+    });
   };
 
   const advanceAnswer = (details: { readonly body: string }): Answer => {
@@ -117,7 +164,7 @@ export const seatRoutes = (options: { readonly service: SeatService }): ((reques
   const noSuchRoute = (request: HttpRequest): Answer =>
     refusalAnswer({
       reason: "invalid-request",
-      message: `WHAT: the seating service offers no ${request.method} ${request.path}. WHY: the service answers only the seat, hold and demonstration routes it promises. HOW: use GET /seats, GET /seats/{seatId}, POST /seats/{seatId}/holds or POST /demo/clock/advance.`,
+      message: `WHAT: the seating service offers no ${request.method} ${request.path}. WHY: the service answers only the seat, hold and demonstration routes it promises. HOW: use GET /seats, GET /seats/{seatId}, POST /seats/{seatId}/holds, POST /seats/{seatId}/holds/{holdRef}/confirm or POST /demo/clock/advance.`,
     });
 
   return (request: HttpRequest): Answer => {
@@ -137,6 +184,18 @@ export const seatRoutes = (options: { readonly service: SeatService }): ((reques
       return onSeat({
         rawSeatId: segments[1],
         answer: (seatId) => holdAnswer({ seatId, body: request.body }),
+      });
+    }
+    if (
+      request.method === "POST" &&
+      segments.length === 5 &&
+      segments[0] === "seats" &&
+      segments[2] === "holds" &&
+      segments[4] === "confirm"
+    ) {
+      return onSeat({
+        rawSeatId: segments[1],
+        answer: (seatId) => confirmAnswer({ seatId, rawHoldRef: segments[3] }),
       });
     }
     if (

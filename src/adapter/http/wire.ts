@@ -2,8 +2,11 @@ import { z } from "zod";
 import {
   advanceSecondsSchema,
   bookerNameSchema,
+  holdRefSchema,
   refusalReasons,
+  type Outcome,
   type RefusalReason,
+  type SeatId,
   type SeatState,
   type Seconds,
 } from "../../domain/seat-state.ts";
@@ -32,6 +35,7 @@ export const responseSchemas = {
 
 export const holdRequestSchema = z.object({ booker: bookerNameSchema });
 export const advanceRequestSchema = z.object({ seconds: advanceSecondsSchema });
+export const holdPathSchema = z.object({ holdRef: holdRefSchema });
 
 export type SeatReportBody = z.infer<typeof seatReportSchema>;
 export type SeatingAreaBody = z.infer<typeof seatingAreaSchema>;
@@ -93,6 +97,22 @@ export const grantedHoldAnswer = (options: {
   status: 201,
   body: responseSchemas.grantedHold.parse({ holdRef: options.reference, deadline: options.deadline }),
 });
+
+export const outcomeAnswer = (options: {
+  readonly seatId: SeatId;
+  readonly outcome: Outcome;
+  readonly refusal: (reason: RefusalReason) => Answer;
+}): Answer => {
+  const outcome = options.outcome;
+  switch (outcome.tag) {
+    case "granted":
+      return grantedHoldAnswer({ reference: outcome.reference, deadline: outcome.deadline });
+    case "sold":
+      return seatReportAnswer({ seat: { seatId: options.seatId, state: outcome.next } });
+    case "refused":
+      return options.refusal(outcome.reason);
+  }
+};
 
 export const clockAnswer = (options: { readonly now: Seconds }): Answer => ({
   status: 200,
