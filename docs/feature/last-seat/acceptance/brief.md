@@ -60,3 +60,32 @@
 - `tsconfig.json`
 - `vitest.config.ts`
 - `tests/architecture/dependency-direction.test.ts`
+###     Through the HTTP API, a second booker is refused a seat that is held or sold, and only the holder of the hold reference can confirm it, so the seat is never sold twice.
+
+## Acceptance Obligations
+| ID | Stimulus | Expected result |
+| --- | --- | --- |
+| V3-obs | A booker holds a seat; a second booker asks for it and a stranger confirms it with a reference nobody was given; the holder then confirms with their own reference; the second booker asks again and the spent reference is presented again. | Both early requests are refused and the seating area reads byte for byte as it did before them; the holder's confirmation sells the seat to them alone; the later hold and the repeated confirmation are both refused as sold, and the seating area reads byte for byte as it did right after the sale. |
+| cc-one-holder | Generated walks of three to eight holds, confirmations, cancellations and clock advances by three bookers over three seats, including two bookers racing for one seat. | No seat is ever reported sold to more than one booker during the walk, and every seat is reported once, in the configured order, with one holder or one owner at a time. |
+| law-hold-only-on-free | In each generated walk, a hold asked for a seat the walk already made held or sold, and a hold asked after a cancellation or an expiry freed it. | The hold is granted only when the seat reads free at that moment, with the deadline the clock and the configured duration give; otherwise it is refused as held or as sold and nothing changes. |
+| law-only-the-holder-acts | In the journey and in each generated walk, confirmations and cancellations carrying the reference of another seat's hold or a reference nobody was ever given. | Each is refused as an unknown hold, the holder keeps the seat with the same deadline, and the seating area answer is unchanged. |
+| law-sold-is-absorbing | In each generated walk, holds, confirmations, cancellations and clock advances that follow a sale, over several seats at once. | Every later report names the same single owner for that seat, with no holder and no deadline, and every command on it is refused. |
+| law-refusal-is-inert | Every refused command of the journey and of each generated walk: held, sold, unknown reference, expired hold. | The seating area answer taken after the refusal is byte for byte the answer taken immediately before it, and the time the service reports moves only by the seconds a demonstration advance asked for. |
+| law-deadline-is-authoritative | In the generated walks, confirmations and cancellations that land one second before the deadline, exactly on the deadline second, and after a clock jump far past several hold durations. | Before the deadline the holder's command succeeds; from the deadline second on it is refused as expired, the seat reads free and the next booker can hold it. |
+| law-wire-shape:W-case-held | A second booker asking for a seat somebody is holding. | HTTP 409 with reason code seat-held, and the holder keeps the seat. |
+| law-wire-shape:W-case-sold | A hold asked for a sold seat, and the spent hold reference of that sold seat presented again. | HTTP 409 with reason code seat-sold in both cases, never a reason that hides the sale behind an unknown reference. |
+| law-wire-shape:W-case-no-hold | Two confirmations of one held seat: one carrying a reference nobody was ever given and one carrying the live reference of another booker's hold on another seat. | Both answer HTTP 404 with reason code no-such-hold and the same body, so a stranger cannot tell a live reference from one that never existed. |
+| law-wire-shape:W-case-cancelled | The holder of a seat giving the hold up with their own reference inside a generated walk. | HTTP 200 with that seat reported free, and the next booker who asks for it is granted the hold. |
+| arch-dependency-direction | Every module under the domain folder is read for the modules it imports. | No domain module imports an application or adapter module, so the pure transition stays testable on its own. |
+
+## Oracle
+`tests/acceptance/one-seat-is-never-sold-twice.test.ts`
+
+## Supports
+- `package-lock.json`
+- `package.json`
+- `tests/acceptance/support/seat-api-client.ts`
+- `tests/acceptance/support/start-test-service.ts`
+- `tsconfig.json`
+- `vitest.config.ts`
+- `tests/architecture/dependency-direction.test.ts`
